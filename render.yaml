@@ -3,9 +3,10 @@ services:
     name: auto-marketplace-api
     env: node
     rootDir: backend
-    buildCommand: npm install && npm run deploy:prepare
+    buildCommand: npm install && npx prisma generate && npx prisma db push && node prisma/seed.js && npm run build
     startCommand: npm start
-    plan: starter
+    plan: free
+    healthCheckPath: /api/health
     envVars:
       - key: NODE_VERSION
         value: 20
@@ -13,13 +14,16 @@ services:
         fromDatabase:
           name: auto-marketplace-db
           property: connectionString
-      - key: PORT
-        value: 4000
+      - key: JWT_SECRET
+        generateValue: true
       - key: HOST
         value: 0.0.0.0
-  - type: web
+      - key: PORT
+        value: 10000
+      - key: NODE_ENV
+        value: production
+  - type: static
     name: auto-marketplace-web
-    env: static
     rootDir: frontend
     buildCommand: npm install && npm run build
     staticPublishPath: dist
@@ -29,7 +33,7 @@ services:
         destination: /index.html
     envVars:
       - key: VITE_API_URL
-        value: https://api.seudominio.com/api
+        value: https://auto-marketplace-api.onrender.com/api
 databases:
   - name: auto-marketplace-db
-    plan: starter
+    plan: free
