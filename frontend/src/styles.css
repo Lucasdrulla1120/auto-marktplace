@@ -170,3 +170,21 @@ textarea { width: 100%; border: 1px solid #d8deef; border-radius: 12px; padding:
 .store-card-body { padding: 16px; display: grid; gap: 12px; }
 .store-header-line { display: flex; gap: 12px; align-items: center; }
 .store-logo { width: 58px; height: 58px; border-radius: 14px; object-fit: cover; border: 1px solid #dce5f7; }
+
+.chat-layout { display:grid; grid-template-columns: 320px 1fr; gap: 18px; }
+.chat-sidebar { display:grid; gap: 10px; max-height: 620px; overflow:auto; padding-right: 6px; }
+.chat-thread { text-align:left; width:100%; border:1px solid #dfe7fb; background:#f8fbff; border-radius:16px; padding:14px; display:grid; gap:8px; }
+.chat-thread.active { border-color:#204ba7; box-shadow:0 10px 24px rgba(32,75,167,.14); background:white; }
+.chat-thread div { display:flex; justify-content:space-between; gap:10px; align-items:flex-start; }
+.chat-thread small { color:#5a6785; }
+.chat-thread-meta { display:flex; justify-content:space-between; align-items:center; gap:10px; font-size:12px; color:#6b7280; }
+.badge-pill { background:#e8efff; color:#1f3f91; border-radius:999px; padding:4px 10px; font-size:12px; font-weight:700; }
+.chat-pane { border:1px solid #dfe7fb; border-radius:18px; background:#fbfdff; padding:18px; display:grid; gap:14px; min-height:420px; }
+.chat-pane-head { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; }
+.chat-messages { display:grid; gap:10px; max-height:380px; overflow:auto; padding-right:6px; }
+.chat-bubble { max-width:78%; background:#edf2ff; border-radius:16px 16px 16px 6px; padding:12px 14px; display:grid; gap:6px; }
+.chat-bubble.mine { margin-left:auto; background:#244fc0; color:#fff; border-radius:16px 16px 6px 16px; }
+.chat-bubble span { font-size:12px; opacity:.78; }
+.chat-compose { display:grid; gap:10px; }
+.chat-empty { display:grid; place-items:center; text-align:center; color:#5f6d8d; min-height:260px; }
+@media (max-width: 900px) { .chat-layout { grid-template-columns: 1fr; } .chat-pane-head { flex-direction:column; } .chat-bubble { max-width:100%; } }

@@ -112,6 +112,18 @@ function formatDate(dateValue) {
   return new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(date);
 }
 
+function getConversationPeer(conversation, userId) {
+  if (!conversation) return null;
+  return conversation.buyerId === userId ? conversation.seller : conversation.buyer;
+}
+
+function formatConversationDate(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(date);
+}
+
 const storeProfileInitial = {
   storeName: '', storeLogoUrl: '', storeBannerUrl: '', storeDescription: '',
   storeCity: '', storeNeighborhood: '', storeWhatsapp: '', storeInstagram: '', storeWebsite: '', storeIsActive: true
@@ -160,8 +172,8 @@ function Header({ auth, onLogout, currentView, setCurrentView }) {
   return (
     <header className="topbar">
       <div>
-        <h1>Auto Marketplace V3.7 Production Ready</h1>
-        <p>Base pronta para produção com Mercado Pago, checkout Pix, webhook e vitrine comercial mais limpa.</p>
+        <h1>Local Marketplace</h1>
+        <p>Compre, anuncie e converse sobre veículos com uma experiência local mais direta e comercial.</p>
       </div>
       <nav className="topnav">
         <button className={currentView === 'home' ? 'active' : ''} onClick={() => setCurrentView('home')}>Anúncios</button>
@@ -183,10 +195,10 @@ function Hero({ listingsCount, onOpenAuth, setCurrentView }) {
   return (
     <section className="hero card">
       <div>
-        <span className="eyebrow">Marketplace automotivo local</span>
-        <h2>Encontre e anuncie veículos com uma vitrine mais clara, mais rápida e mais orientada à conversão.</h2>
+        <span className="eyebrow">Marketplace automotivo da sua região</span>
+        <h2>Compre, anuncie e converse diretamente com compradores e vendedores na sua cidade.</h2>
         <p>
-          Busca forte, fotos em destaque, contato direto por WhatsApp e uma experiência mais próxima dos grandes portais automotivos — só que focada na sua região.
+          Busca simples, fotos organizadas, chat interno no estilo classificados e contato rápido por WhatsApp para acelerar a negociação.
         </p>
         <div className="actions-row wrap">
           <button onClick={() => setCurrentView('dashboard')}>Publicar anúncio</button>
@@ -243,11 +255,6 @@ function AuthPanel({ onAuthSuccess }) {
         <button type="submit" disabled={loading}>{loading ? 'Aguarde...' : mode === 'login' ? 'Entrar' : 'Cadastrar'}</button>
       </form>
       {message && <p className="message">{message}</p>}
-      <div className="demo-box">
-        <strong>Acessos demo</strong>
-        <span>Admin: admin@automarket.local / admin123</span>
-        <span>Usuário: vendedor@automarket.local / user123</span>
-      </div>
     </section>
   );
 }
@@ -373,7 +380,7 @@ function Gallery({ images, title }) {
   );
 }
 
-function DetailModal({ listing, auth, onClose, onToggleFavorite, refresh, relatedListings, openListing }) {
+function DetailModal({ listing, auth, onClose, onToggleFavorite, refresh, relatedListings, openListing, onStartChat }) {
   const [leadForm, setLeadForm] = useState({ name: '', phone: '', message: `Olá! Tenho interesse no veículo ${listing.title}.` });
   const [leadMessage, setLeadMessage] = useState('');
   const whatsappUrl = buildWhatsAppUrl(listing.phone, listing.title);
@@ -419,9 +426,12 @@ function DetailModal({ listing, auth, onClose, onToggleFavorite, refresh, relate
             <div className="actions-row wrap">
               <a className="button-link success" href={whatsappUrl} target="_blank" rel="noreferrer">Falar no WhatsApp</a>
               {auth.user && (
-                <button className="ghost" onClick={() => onToggleFavorite(listing)}>
-                  {listing.isFavorite ? 'Remover dos favoritos' : 'Salvar nos favoritos'}
-                </button>
+                <>
+                  <button className="ghost" onClick={() => onToggleFavorite(listing)}>
+                    {listing.isFavorite ? 'Remover dos favoritos' : 'Salvar nos favoritos'}
+                  </button>
+                  {auth.user.id !== listing.user?.id && <button onClick={() => onStartChat(listing)}>Conversar no chat</button>}
+                </>
               )}
             </div>
           </div>
@@ -641,7 +651,74 @@ function ListingForm({ auth, editing, onSaved, onCancel }) {
   );
 }
 
-function Dashboard({ auth, listings, favorites, leads, subscription, plans, payments, checkoutState, paymentConfig, myStore, onSaveStore, onRefresh, onEdit, onOpen, onDelete, onToggleFavorite, onLeadStatusChange, onSubscribe, onFeatureListing, onRefreshPayment, onOpenPlans, onOpenStore }) {
+function ChatInbox({ auth, conversations, activeConversation, chatDraft, setChatDraft, onSelectConversation, onSendChat, onOpenListing }) {
+  return (
+    <section className="card">
+      <div className="section-title">
+        <div>
+          <h2>Chat de negociações</h2>
+          <p>Converse como em marketplaces de classificados, sem sair da plataforma.</p>
+        </div>
+      </div>
+      <div className="chat-layout">
+        <aside className="chat-sidebar">
+          {conversations.map((conversation) => {
+            const peer = getConversationPeer(conversation, auth.user.id);
+            const lastMessage = conversation.messages?.[conversation.messages.length - 1];
+            return (
+              <button key={conversation.id} type="button" className={`chat-thread ${activeConversation?.id === conversation.id ? 'active' : ''}`} onClick={() => onSelectConversation(conversation.id)}>
+                <div>
+                  <strong>{peer?.storeName || peer?.name || 'Contato'}</strong>
+                  <span>{conversation.listing?.title || 'Anúncio'}</span>
+                </div>
+                <small>{lastMessage?.content?.slice(0, 70) || 'Conversa iniciada.'}</small>
+                <div className="chat-thread-meta">
+                  <span>{formatConversationDate(lastMessage?.createdAt || conversation.updatedAt)}</span>
+                  {!!conversation._count?.messages && <span className="badge-pill">{conversation._count.messages} nova(s)</span>}
+                </div>
+              </button>
+            );
+          })}
+          {conversations.length === 0 && <p className="empty-inline">Nenhuma conversa ainda. Abra um anúncio e clique em conversar.</p>}
+        </aside>
+        <div className="chat-pane">
+          {activeConversation ? (
+            <>
+              <div className="chat-pane-head">
+                <div>
+                  <h3>{getConversationPeer(activeConversation, auth.user.id)?.storeName || getConversationPeer(activeConversation, auth.user.id)?.name || 'Conversa'}</h3>
+                  <p>{activeConversation.listing?.title || 'Negociação em andamento'}</p>
+                </div>
+                <div className="actions-row wrap">
+                  {activeConversation.listing && <button className="ghost" onClick={() => onOpenListing(activeConversation.listing)}>Abrir anúncio</button>}
+                </div>
+              </div>
+              <div className="chat-messages">
+                {activeConversation.messages?.map((msg) => (
+                  <div key={msg.id} className={`chat-bubble ${msg.senderId === auth.user.id ? 'mine' : ''}`}>
+                    <p>{msg.content}</p>
+                    <span>{formatConversationDate(msg.createdAt)}</span>
+                  </div>
+                ))}
+              </div>
+              <form className="chat-compose" onSubmit={(e) => { e.preventDefault(); onSendChat(activeConversation.id); }}>
+                <textarea rows={3} placeholder="Digite sua mensagem..." value={chatDraft} onChange={(e) => setChatDraft(e.target.value)} />
+                <div className="actions-row wrap"><button type="submit">Enviar mensagem</button></div>
+              </form>
+            </>
+          ) : (
+            <div className="chat-empty">
+              <h3>Selecione uma conversa</h3>
+              <p>Quando alguém falar com você sobre um anúncio, a conversa aparece aqui.</p>
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function Dashboard({ auth, listings, favorites, leads, conversations, activeConversation, chatDraft, setChatDraft, onSelectConversation, onSendChat, subscription, plans, payments, checkoutState, paymentConfig, myStore, onSaveStore, onRefresh, onEdit, onOpen, onDelete, onToggleFavorite, onLeadStatusChange, onSubscribe, onFeatureListing, onRefreshPayment, onOpenPlans, onOpenStore }) {
   const upgradePlans = getUpgradePlans(plans, subscription);
   const isParticular = getCurrentPlanSlug(subscription) === 'particular' || !subscription;
   const canManageStore = ['lojista', 'premium'].includes(getCurrentPlanSlug(subscription));
@@ -735,31 +812,7 @@ function Dashboard({ auth, listings, favorites, leads, subscription, plans, paym
           </div>
         </section>
       )}
-      <section className="card">
-        <div className="section-title">
-          <div>
-            <h2>Chat e atendimento</h2>
-            <p>Central rápida para responder interessados por WhatsApp e acompanhar o andamento das conversas.</p>
-          </div>
-        </div>
-        <div className="table-like">
-          {leads.map((lead) => (
-            <div key={lead.id} className="table-row stacked-row">
-              <div>
-                <strong>{lead.name}</strong>
-                <span>{lead.phone} • {lead.listing?.title || 'Veículo sem título'}</span>
-              </div>
-              <p>{lead.message}</p>
-              <div className="actions-row wrap">
-                <a className="button-link success" href={buildWhatsAppUrl(lead.phone, lead.listing?.title || '')} target="_blank" rel="noreferrer">Responder no WhatsApp</a>
-                <select value={lead.status || 'NEW'} onChange={(e) => onLeadStatusChange(lead.id, e.target.value)}><option value="NEW">Novo</option><option value="CONTACTED">Contatado</option><option value="NEGOTIATING">Negociando</option><option value="CLOSED">Fechado</option><option value="LOST">Perdido</option></select>
-                {lead.listing && <button onClick={() => onOpen(lead.listing)}>Abrir anúncio</button>}
-              </div>
-            </div>
-          ))}
-          {leads.length === 0 && <p className="empty-inline">Nenhum lead recebido ainda.</p>}
-        </div>
-      </section>
+      <ChatInbox auth={auth} conversations={conversations} activeConversation={activeConversation} chatDraft={chatDraft} setChatDraft={setChatDraft} onSelectConversation={onSelectConversation} onSendChat={onSendChat} onOpenListing={onOpen} />
       <section className="card plan-flow-card">
         <div className="section-title">
           <div>
@@ -1064,10 +1117,64 @@ export default function App() {
   const [editingListing, setEditingListing] = useState(null);
   const [message, setMessage] = useState('');
   const [adminData, setAdminData] = useState({ dashboard: { users: 0, listings: 0, pending: 0, leads: 0, featured: 0, activeSubscriptions: 0 }, listings: [], leads: [], subscriptions: [], payments: [], plans: [], users: [] });
+  const [conversations, setConversations] = useState([]);
+  const [activeConversation, setActiveConversation] = useState(null);
+  const [chatDraft, setChatDraft] = useState('');
 
   useEffect(() => {
     localStorage.setItem('automarket-auth', JSON.stringify(auth));
   }, [auth]);
+
+  const fetchConversations = async () => {
+    if (!auth.user) return;
+    try {
+      const data = await api('/chat', {}, auth.token);
+      setConversations(data);
+      if (activeConversation?.id) {
+        const current = data.find((item) => item.id === activeConversation.id);
+        if (current) setActiveConversation(current);
+      }
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  const openConversation = async (conversationId) => {
+    try {
+      const data = await api(`/chat/${conversationId}`, {}, auth.token);
+      setActiveConversation(data);
+      setCurrentView('dashboard');
+      await fetchConversations();
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  const startConversation = async (listing) => {
+    if (!auth.token) { setCurrentView('auth'); return; }
+    try {
+      const data = await api('/chat/start', { method: 'POST', body: JSON.stringify({ listingId: listing.id }) }, auth.token);
+      setActiveConversation(data);
+      setCurrentView('dashboard');
+      setSelectedListing(null);
+      setChatDraft('');
+      await fetchConversations();
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  const sendChatMessage = async (conversationId) => {
+    if (!chatDraft.trim()) return;
+    try {
+      const data = await api(`/chat/${conversationId}/messages`, { method: 'POST', body: JSON.stringify({ content: chatDraft }) }, auth.token);
+      setActiveConversation(data);
+      setChatDraft('');
+      await fetchConversations();
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
 
   const fetchListings = async () => {
     try {
@@ -1184,6 +1291,7 @@ export default function App() {
       fetchSellerLeads();
       fetchSubscription();
       fetchMyStore();
+      fetchConversations();
       if (auth.user.role === 'ADMIN') fetchAdmin();
     } else {
       setMyListings([]);
@@ -1191,6 +1299,9 @@ export default function App() {
       setSellerLeads([]);
       setSubscription(null);
       setMyStore({ canManageStore: false, planSlug: 'particular', planName: 'Particular', profile: storeProfileInitial });
+      setConversations([]);
+      setActiveConversation(null);
+      setChatDraft('');
     }
   }, [auth.user]);
 
@@ -1267,6 +1378,7 @@ export default function App() {
       await fetchSellerLeads();
       await fetchSubscription();
       await fetchMyStore();
+      await fetchConversations();
       if (auth.user.role === 'ADMIN') await fetchAdmin();
     }
   };
@@ -1471,6 +1583,12 @@ export default function App() {
               listings={myListings}
               favorites={favoriteListings}
               leads={sellerLeads}
+              conversations={conversations}
+              activeConversation={activeConversation}
+              chatDraft={chatDraft}
+              setChatDraft={setChatDraft}
+              onSelectConversation={openConversation}
+              onSendChat={sendChatMessage}
               subscription={subscription}
               plans={plans}
               payments={payments}
@@ -1510,6 +1628,7 @@ export default function App() {
           refresh={refreshAll}
           relatedListings={relatedListings}
           openListing={openListing}
+          onStartChat={startConversation}
         />
       )}
     </div>

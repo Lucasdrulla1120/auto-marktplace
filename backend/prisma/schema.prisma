@@ -30,7 +30,11 @@ model User {
   favorites     Favorite[]
   subscriptions Subscription[]
   payments      Payment[]
+  buyerConversations Conversation[] @relation("BuyerConversations")
+  sellerConversations Conversation[] @relation("SellerConversations")
+  chatMessages   ChatMessage[]
 }
+
 
 model Listing {
   id             Int            @id @default(autoincrement())
@@ -58,7 +62,9 @@ model Listing {
   favorites      Favorite[]
   leads          Lead[]
   payments       Payment[]
+  conversations  Conversation[]
 }
+
 
 model ListingImage {
   id        Int      @id @default(autoincrement())
@@ -159,4 +165,31 @@ model WebhookEvent {
   processed      Boolean  @default(false)
   processingNote String?
   createdAt      DateTime @default(now())
+}
+
+
+model Conversation {
+  id         Int          @id @default(autoincrement())
+  listingId   Int
+  buyerId    Int
+  sellerId   Int
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+  listing    Listing      @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  buyer      User         @relation("BuyerConversations", fields: [buyerId], references: [id], onDelete: Cascade)
+  seller     User         @relation("SellerConversations", fields: [sellerId], references: [id], onDelete: Cascade)
+  messages   ChatMessage[]
+
+  @@unique([listingId, buyerId, sellerId])
+}
+
+model ChatMessage {
+  id             Int          @id @default(autoincrement())
+  conversationId Int
+  senderId       Int
+  content        String
+  readAt         DateTime?
+  createdAt      DateTime     @default(now())
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender         User         @relation(fields: [senderId], references: [id], onDelete: Cascade)
 }
