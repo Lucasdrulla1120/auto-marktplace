@@ -3,16 +3,24 @@ import React, { useEffect, useMemo, useState } from 'react';
 const API_URL = (import.meta.env.VITE_API_URL || 'http://127.0.0.1:4000/api').replace(/\/$/, '');
 const emptyAuth = { token: '', user: null };
 const VEHICLE_DATA = {
-  Chevrolet: ['Onix', 'Tracker', 'Cruze', 'S10', 'Spin'],
-  Fiat: ['Argo', 'Mobi', 'Toro', 'Pulse', 'Strada'],
-  Ford: ['Ka', 'Ranger', 'EcoSport', 'Fiesta', 'Focus'],
-  Honda: ['Civic', 'City', 'HR-V', 'Fit', 'WR-V'],
-  Hyundai: ['HB20', 'Creta', 'ix35', 'Tucson', 'Azera'],
-  Jeep: ['Renegade', 'Compass', 'Commander', 'Cherokee', 'Wrangler'],
-  Nissan: ['Kicks', 'Versa', 'March', 'Sentra', 'Frontier'],
-  Renault: ['Kwid', 'Sandero', 'Logan', 'Duster', 'Oroch'],
-  Toyota: ['Corolla', 'Hilux', 'Yaris', 'SW4', 'Etios'],
-  Volkswagen: ['Gol', 'Polo', 'T-Cross', 'Nivus', 'Saveiro'],
+  Chevrolet: ['Agile', 'Astra', 'Blazer', 'Bolt', 'Camaro', 'Celta', 'Classic', 'Cobalt', 'Corsa', 'Cruze', 'Equinox', 'Joy', 'Kadett', 'Meriva', 'Montana', 'Onix', 'Onix Plus', 'Omega', 'Prisma', 'S10', 'Silverado', 'Sonic', 'Spin', 'Tracker', 'Trailblazer', 'Vectra', 'Zafira'],
+  Citroen: ['Aircross', 'Basalt', 'Berlingo', 'C3', 'C3 Aircross', 'C4', 'C4 Cactus', 'C4 Lounge', 'C5', 'Jumpy'],
+  Fiat: ['147', '500', 'Argo', 'Bravo', 'Cronos', 'Doblo', 'Fastback', 'Fiorino', 'Freemont', 'Grand Siena', 'Idea', 'Linea', 'Marea', 'Mobi', 'Palio', 'Punto', 'Pulse', 'Siena', 'Strada', 'Tempra', 'Tipo', 'Toro', 'Uno'],
+  Ford: ['Belina', 'Bronco', 'Courier', 'Del Rey', 'EcoSport', 'Edge', 'Escort', 'Expedition', 'F-1000', 'Fiesta', 'Focus', 'Fusion', 'Ka', 'Maverick', 'Mustang', 'Pampa', 'Ranger', 'Territory', 'Versailles'],
+  GWM: ['Haval H6', 'Ora 03'],
+  Honda: ['Accord', 'City', 'Civic', 'CR-V', 'Fit', 'HR-V', 'WR-V'],
+  Hyundai: ['Azera', 'Creta', 'Elantra', 'HB20', 'HB20S', 'HR', 'Santa Fe', 'Tucson', 'Veloster', 'Veracruz', 'ix35'],
+  Jeep: ['Cherokee', 'Commander', 'Compass', 'Gladiator', 'Grand Cherokee', 'Renegade', 'Wrangler'],
+  Kia: ['Bongo', 'Cerato', 'Mohave', 'Picanto', 'Seltos', 'Sorento', 'Soul', 'Sportage', 'Stonic'],
+  Mitsubishi: ['ASX', 'Eclipse Cross', 'L200', 'Lancer', 'Outlander', 'Pajero', 'Pajero Dakar', 'Pajero Full', 'Pajero TR4'],
+  Nissan: ['Frontier', 'Kicks', 'Leaf', 'Livina', 'March', 'Sentra', 'Tiida', 'Versa', 'X-Trail'],
+  Peugeot: ['2008', '206', '207', '208', '3008', '307', '308', '408', 'Boxer', 'Expert', 'Hoggar', 'Partner'],
+  Ram: ['1500', '2500', '3500', 'Rampage'],
+  Renault: ['Captur', 'Clio', 'Duster', 'Fluence', 'Kardian', 'Kwid', 'Laguna', 'Logan', 'Master', 'Megane', 'Oroch', 'Sandero', 'Scenic', 'Symbol'],
+  Toyota: ['Bandeirante', 'Camry', 'Corolla', 'Corolla Cross', 'Etios', 'Fielder', 'Hilux', 'Prius', 'RAV4', 'SW4', 'Yaris'],
+  Volkswagen: ['Amarok', 'Brasilia', 'CrossFox', 'Fox', 'Fusca', 'Gol', 'Golf', 'Jetta', 'Kombi', 'Nivus', 'Parati', 'Passat', 'Polo', 'Santana', 'Saveiro', 'SpaceFox', 'T-Cross', 'Taos', 'Tiguan', 'Up', 'Voyage'],
+  Volvo: ['C30', 'S60', 'S90', 'XC40', 'XC60', 'XC90'],
+  BYD: ['Dolphin', 'Dolphin Mini', 'Han', 'Seal', 'Song Plus', 'Yuan Plus'],
 };
 const BRANDS = Object.keys(VEHICLE_DATA);
 const COLORS = ['Branco', 'Preto', 'Prata', 'Cinza', 'Vermelho', 'Azul', 'Verde', 'Marrom', 'Bege', 'Amarelo'];
@@ -48,9 +56,11 @@ function buildWhatsAppUrl(phone, title = '') {
 function formatSubscriptionStatus(status = '') {
   const labels = {
     PENDING_PAYMENT: 'Upgrade aguardando pagamento',
+    PAYMENT_CONFIRMED: 'Pagamento confirmado',
     ACTIVATING: 'Ativando plano',
     ACTIVE: 'Plano ativo',
     PAST_DUE: 'Pagamento em atraso',
+    EXPIRED: 'Assinatura expirada',
     CANCELLED: 'Assinatura cancelada',
     SUPERSEDED: 'Plano anterior encerrado',
   };
@@ -82,12 +92,24 @@ function getCurrentPlanSlug(subscription) {
 function getUpgradePlans(plans = [], subscription) {
   const currentSlug = getCurrentPlanSlug(subscription);
   if (currentSlug === 'particular') return plans.filter((plan) => plan.slug !== 'particular');
-  return plans.filter((plan) => plan.slug !== currentSlug);
+  return plans.filter((plan) => plan.slug !== currentSlug && plan.slug !== 'particular');
 }
 
 function getListingAllowanceLabel(subscription) {
   const limit = subscription?.plan?.listingLimit ?? 2;
   return `${limit} anúncio(s) incluído(s)`;
+}
+
+function getRemainingListingSlots(subscription, listingsCount = 0) {
+  const limit = subscription?.plan?.listingLimit ?? 2;
+  return Math.max(limit - listingsCount, 0);
+}
+
+function formatDate(dateValue) {
+  if (!dateValue) return 'Sem data definida';
+  const date = new Date(dateValue);
+  if (Number.isNaN(date.getTime())) return 'Sem data definida';
+  return new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(date);
 }
 
 const storeProfileInitial = {
@@ -458,6 +480,7 @@ function ListingForm({ auth, editing, onSaved, onCancel }) {
   }, [editing, auth.user]);
 
   const modelOptions = form.brand ? (VEHICLE_DATA[form.brand] || []) : [];
+  const allowManualModel = !!form.brand;
 
   const detectLocation = async () => {
     if (!navigator.geolocation) {
@@ -575,8 +598,8 @@ function ListingForm({ auth, editing, onSaved, onCancel }) {
         </div>
         <textarea placeholder="Descrição" rows={4} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
         <div className="grid three">
-          <VehicleFieldSelect label="Marca" value={form.brand} onChange={(value) => setForm({ ...form, brand: value, model: '' })} options={BRANDS} />
-          <VehicleFieldSelect label="Modelo" value={form.model} onChange={(value) => setForm({ ...form, model: value })} options={modelOptions} />
+          <div className="field-group"><span>Marca</span><input list="brand-options" placeholder="Selecione ou digite a marca" value={form.brand} onChange={(e) => setForm({ ...form, brand: e.target.value, model: '' })} /><datalist id="brand-options">{BRANDS.map((brand) => <option key={brand} value={brand} />)}</datalist><small>Se não encontrar, digite manualmente.</small></div>
+          <div className="field-group"><span>Modelo</span><input list="model-options" placeholder={allowManualModel ? 'Selecione ou digite o modelo' : 'Digite primeiro a marca'} value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} disabled={!allowManualModel} /><datalist id="model-options">{modelOptions.map((model) => <option key={model} value={model} />)}</datalist><small>{allowManualModel ? 'Se não encontrar, digite manualmente.' : 'Escolha ou digite uma marca para liberar o modelo.'}</small></div>
           <label className="field-group"><span>Ano</span><input placeholder="Ex.: 2021" value={form.year} onChange={(e) => setForm({ ...form, year: e.target.value })} /></label>
           <label className="field-group"><span>KM</span><input placeholder="Ex.: 35000" value={form.km} onChange={(e) => setForm({ ...form, km: e.target.value })} /></label>
           <VehicleFieldSelect label="Câmbio" value={form.transmission} onChange={(value) => setForm({ ...form, transmission: value })} options={TRANSMISSIONS} />
@@ -646,7 +669,7 @@ function Dashboard({ auth, listings, favorites, leads, subscription, plans, paym
         <section className="card metric-card compact-metric">
           <span>Plano atual</span>
           <strong>{subscription?.plan?.name || 'Particular'}</strong>
-          <small>{formatSubscriptionStatus(subscription?.status)} • {getListingAllowanceLabel(subscription)}</small>
+          <small>{formatSubscriptionStatus(subscription?.status)} • {getListingAllowanceLabel(subscription)} • expira em {formatDate(subscription?.expiresAt)}</small>
         </section>
         <section className="card metric-card compact-metric">
           <span>Leads recebidos</span>
@@ -715,8 +738,8 @@ function Dashboard({ auth, listings, favorites, leads, subscription, plans, paym
       <section className="card">
         <div className="section-title">
           <div>
-            <h2>Leads recebidos</h2>
-            <p>Esses contatos chegam direto para o anunciante no painel.</p>
+            <h2>Chat e atendimento</h2>
+            <p>Central rápida para responder interessados por WhatsApp e acompanhar o andamento das conversas.</p>
           </div>
         </div>
         <div className="table-like">
@@ -748,7 +771,8 @@ function Dashboard({ auth, listings, favorites, leads, subscription, plans, paym
           <div>
             <span className="subtle">Plano atual</span>
             <strong>{subscription?.plan?.name || 'Particular'}</strong>
-            <p>{formatSubscriptionStatus(subscription?.status)} • {listings.length}/{subscription?.plan?.listingLimit ?? 2} anúncio(s) em uso</p>
+            <p>{formatSubscriptionStatus(subscription?.status)} • {listings.length}/{subscription?.plan?.listingLimit ?? 2} anúncio(s) em uso • restam {getRemainingListingSlots(subscription, listings.length)} anúncio(s)</p>
+            <p className="subtle">Expiração da assinatura: {formatDate(subscription?.expiresAt)}</p>
           </div>
           <div className="actions-row wrap">
             {canManageStore && <button className="ghost" onClick={onOpenStore}>Ver minha loja</button>}
@@ -758,7 +782,7 @@ function Dashboard({ auth, listings, favorites, leads, subscription, plans, paym
         {checkoutState ? (
           <div className="checkout-box highlighted">
             <strong>Pagamento do upgrade</strong>
-            <span>{checkoutState.instructions || 'Escaneie o QR Code Pix ou copie o código para pagar.'}</span>
+            <span>{checkoutState.instructions || 'Escaneie o QR Code Pix ou copie o código para pagar. A confirmação acontece automaticamente, sem precisar clicar em verificar pagamento.'}</span>
             <div className="chip-row wider">
               <span>Aguardando pagamento</span>
               <span>Pix gerado na hora</span>
@@ -992,7 +1016,11 @@ function PlansPage({ plans, subscription, onSubscribe, paymentConfig }) {
                 <li>{plan.featuredSlots} destaque(s) simultâneo(s)</li>
                 {planBenefits(plan).map((item) => <li key={item}>{item}</li>)}
               </ul>
-              <button disabled={currentPlanId === plan.id} onClick={() => onSubscribe(plan.id)}>{currentPlanId === plan.id ? 'Plano atual' : 'Fazer upgrade e gerar Pix'}</button>
+              {plan.slug === 'particular' ? (
+                <div className="chip-row wider"><span>Plano padrão ativo no cadastro</span></div>
+              ) : (
+                <button disabled={currentPlanId === plan.id} onClick={() => onSubscribe(plan.id)}>{currentPlanId === plan.id ? 'Plano atual' : 'Fazer upgrade e gerar Pix'}</button>
+              )}
             </article>
           ))}
         </div>
@@ -1209,7 +1237,7 @@ export default function App() {
     };
 
     runRefresh(true);
-    const interval = setInterval(() => runRefresh(true), 5000);
+    const interval = setInterval(() => runRefresh(true), 3000);
 
     return () => {
       cancelled = true;
