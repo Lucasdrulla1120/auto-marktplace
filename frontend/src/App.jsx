@@ -47,22 +47,23 @@ function buildWhatsAppUrl(phone, title = '') {
 
 function formatSubscriptionStatus(status = '') {
   const labels = {
-    PENDING_PAYMENT: 'Aguardando pagamento',
-    ACTIVATING: 'Em ativação',
-    ACTIVE: 'Ativo',
-    PAST_DUE: 'Em atraso',
-    CANCELLED: 'Cancelado',
-    SUPERSEDED: 'Substituído',
+    PENDING_PAYMENT: 'Upgrade aguardando pagamento',
+    ACTIVATING: 'Ativando plano',
+    ACTIVE: 'Plano ativo',
+    PAST_DUE: 'Pagamento em atraso',
+    CANCELLED: 'Assinatura cancelada',
+    SUPERSEDED: 'Plano anterior encerrado',
   };
   return labels[status] || (status || 'Sem assinatura');
 }
 
 function formatPaymentStatus(status = '') {
   const labels = {
-    PENDING: 'Aguardando pagamento',
-    PAID: 'Pago',
-    CANCELLED: 'Cancelado',
-    EXPIRED: 'Expirado',
+    PENDING: 'Aguardando confirmação do pagamento',
+    PAID: 'Pagamento aprovado',
+    CANCELLED: 'Pagamento cancelado',
+    EXPIRED: 'Pix expirado',
+    REJECTED: 'Pagamento recusado',
   };
   return labels[status] || status || 'Pendente';
 }
@@ -767,7 +768,7 @@ function Dashboard({ auth, listings, favorites, leads, subscription, plans, paym
             {checkoutState.pixQrBase64 && <img className="pix-qr" src={checkoutState.pixQrBase64} alt="QR Code Pix" />}
             {checkoutState.checkoutUrl && <a className="button-link success" href={checkoutState.checkoutUrl} target="_blank" rel="noreferrer">Abrir QR Code Pix</a>}
             {checkoutState.pixCode && <textarea readOnly rows={5} value={checkoutState.pixCode} />}
-            {checkoutState.paymentId && <div className="actions-row wrap"><button className="ghost" onClick={() => onRefreshPayment(checkoutState.paymentId)}>Verificar pagamento</button></div>}
+            {checkoutState.paymentId && <div className="actions-row wrap"><span className="subtle">Verificação automática do pagamento ativa. Assim que o Pix for aprovado, o plano será atualizado sozinho.</span></div>}
           </div>
         ) : (
           <div className="upgrade-inline-box">
@@ -1170,6 +1171,7 @@ export default function App() {
     if (!checkoutState) return;
     const relatedPayment = checkoutState.paymentId ? payments.find((item) => item.id === checkoutState.paymentId) : null;
     const paymentApproved = relatedPayment?.status === 'PAID';
+    const paymentRejected = ['EXPIRED', 'CANCELLED', 'REJECTED'].includes(relatedPayment?.status);
     const planActivated = checkoutState.type === 'PLAN' && checkoutState.planId && subscription?.plan?.id === checkoutState.planId && ['ACTIVE', 'ACTIVATING'].includes(subscription?.status);
     const featuredApplied = checkoutState.type === 'FEATURED' && checkoutState.listingId && myListings.some((item) => item.id === checkoutState.listingId && item.isFeatured);
 
@@ -1179,7 +1181,41 @@ export default function App() {
         setMessage('Pagamento aprovado e plano ativado com sucesso.');
       }
     }
+
+    if (paymentRejected) {
+      setCheckoutState(null);
+      setMessage(`Cobrança finalizada com status: ${formatPaymentStatus(relatedPayment?.status)}.`);
+    }
   }, [checkoutState, payments, subscription, myListings]);
+
+  useEffect(() => {
+    if (!checkoutState?.paymentId || !auth.token) return;
+
+    const relatedPayment = payments.find((item) => item.id === checkoutState.paymentId);
+    const terminal = ['PAID', 'EXPIRED', 'CANCELLED', 'REJECTED'].includes(relatedPayment?.status);
+    if (terminal) return;
+
+    let cancelled = false;
+    const runRefresh = async (silent = false) => {
+      try {
+        await api(`/payments/${checkoutState.paymentId}/refresh`, { method: 'POST' }, auth.token);
+        if (!cancelled) {
+          await refreshAll();
+          if (!silent) setMessage('Status do pagamento atualizado automaticamente.');
+        }
+      } catch (error) {
+        if (!cancelled && !silent) setMessage(error.message);
+      }
+    };
+
+    runRefresh(true);
+    const interval = setInterval(() => runRefresh(true), 5000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [checkoutState?.paymentId, auth.token]);
 
   const handleAuthSuccess = (data) => {
     setAuth(data);
