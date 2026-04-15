@@ -32,15 +32,12 @@ async function ensureDefaultPlanSubscription(userId, email) {
   });
 }
 
-
 async function cleanupExpiredPasswordTokens() {
   await prisma.passwordResetToken.deleteMany({ where: { expiresAt: { lt: new Date() } } }).catch(() => null);
 }
 
-function buildResetLink(token) {
-  const appUrl = process.env.APP_URL || process.env.FRONTEND_URL || '';
-  if (!appUrl) return token;
-  return `${appUrl.replace(/\/$/, '')}/?token=${token}`;
+function buildRecoveryCode() {
+  return String(Math.floor(100000 + Math.random() * 900000));
 }
 
 const router = express.Router();
@@ -48,30 +45,17 @@ const router = express.Router();
 router.post('/register', async (req, res) => {
   try {
     const { name, email, phone, password } = req.body;
-
     if (!name || !email || !phone || !password) {
       return res.status(400).json({ message: 'Preencha todos os campos obrigatórios.' });
     }
-
     const existingUser = await prisma.user.findUnique({ where: { email } });
-    if (existingUser) {
-      return res.status(409).json({ message: 'E-mail já cadastrado.' });
-    }
+    if (existingUser) return res.status(409).json({ message: 'E-mail já cadastrado.' });
 
     const passwordHash = await bcrypt.hash(password, 10);
-    const user = await prisma.user.create({
-      data: { name, email, phone, passwordHash, role: 'USER' }
-    });
-
+    const user = await prisma.user.create({ data: { name, email, phone, passwordHash, role: 'USER' } });
     await ensureDefaultPlanSubscription(user.id, user.email);
 
-    return res.status(201).json({
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      phone: user.phone,
-      role: user.role,
-    });
+    return res.status(201).json({ id: user.id, name: user.name, email: user.email, phone: user.phone, role: user.role });
   } catch (error) {
     return res.status(500).json({ message: 'Erro ao cadastrar usuário.' });
   }
@@ -80,34 +64,18 @@ router.post('/register', async (req, res) => {
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
-
     const user = await prisma.user.findUnique({ where: { email } });
-    if (!user) {
-      return res.status(401).json({ message: 'Credenciais inválidas.' });
-    }
+    if (!user) return res.status(401).json({ message: 'Credenciais inválidas.' });
 
     const passwordOk = await bcrypt.compare(password, user.passwordHash);
-    if (!passwordOk) {
-      return res.status(401).json({ message: 'Credenciais inválidas.' });
-    }
+    if (!passwordOk) return res.status(401).json({ message: 'Credenciais inválidas.' });
 
     const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, { expiresIn: '7d' });
-
-    return res.json({
-      token,
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        role: user.role,
-      }
-    });
+    return res.json({ token, user: { id: user.id, name: user.name, email: user.email, phone: user.phone, role: user.role } });
   } catch (error) {
     return res.status(500).json({ message: 'Erro ao fazer login.' });
   }
 });
-
 
 router.post('/forgot-password', async (req, res) => {
   try {
@@ -115,14 +83,14 @@ router.post('/forgot-password', async (req, res) => {
     if (!email) return res.status(400).json({ message: 'Informe o e-mail cadastrado.' });
     await cleanupExpiredPasswordTokens();
     const user = await prisma.user.findUnique({ where: { email } });
-    if (!user) return res.json({ message: 'Se o e-mail existir, enviaremos um link de recuperação.' });
+    if (!user) return res.json({ message: 'Se o e-mail existir, enviaremos um código de recuperação.' });
 
-    const plainToken = crypto.randomBytes(24).toString('hex');
-    const tokenHash = crypto.createHash('sha256').update(plainToken).digest('hex');
-    const expiresAt = new Date(Date.now() + 1000 * 60 * 30);
+    const plainCode = buildRecoveryCode();
+    const tokenHash = crypto.createHash('sha256').update(plainCode).digest('hex');
+    const expiresAt = new Date(Date.now() + 1000 * 60 * 15);
+    await prisma.passwordResetToken.deleteMany({ where: { userId: user.id, usedAt: null } }).catch(() => null);
     await prisma.passwordResetToken.create({ data: { userId: user.id, tokenHash, expiresAt } });
 
-    const resetLink = buildResetLink(plainToken);
     if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
       const nodemailer = require('nodemailer');
       const transporter = nodemailer.createTransport({
@@ -134,13 +102,13 @@ router.post('/forgot-password', async (req, res) => {
       await transporter.sendMail({
         from: process.env.SMTP_FROM || process.env.SMTP_USER,
         to: user.email,
-        subject: 'Recuperação de senha - Local Marktplace',
-        text: `Olá, use este link para redefinir sua senha: ${resetLink}`
+        subject: 'Código de recuperação de senha - Local Marketplace',
+        text: `Olá! Seu código de recuperação é ${plainCode}. Ele expira em 15 minutos.`
       });
-      return res.json({ message: 'Enviamos um link de recuperação para o seu e-mail.' });
+      return res.json({ message: 'Enviamos um código de recuperação para o seu e-mail.', delivery: 'EMAIL_CODE' });
     }
 
-    return res.json({ message: 'Recuperação gerada. Configure SMTP para envio automático.', resetToken: plainToken, resetLink });
+    return res.status(503).json({ message: 'Envio por e-mail não configurado. Defina as variáveis SMTP no backend.' });
   } catch (error) {
     return res.status(500).json({ message: 'Não foi possível iniciar a recuperação de senha.' });
   }
@@ -148,22 +116,39 @@ router.post('/forgot-password', async (req, res) => {
 
 router.post('/reset-password', async (req, res) => {
   try {
-    const { token, password } = req.body;
-    if (!token || !password) return res.status(400).json({ message: 'Token e nova senha são obrigatórios.' });
+    const { email, code, password } = req.body;
+    if (!email || !code || !password) return res.status(400).json({ message: 'E-mail, código e nova senha são obrigatórios.' });
     await cleanupExpiredPasswordTokens();
-    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user) return res.status(400).json({ message: 'Código inválido ou expirado.' });
+
+    const tokenHash = crypto.createHash('sha256').update(String(code)).digest('hex');
     const record = await prisma.passwordResetToken.findFirst({
-      where: { tokenHash, usedAt: null, expiresAt: { gt: new Date() } },
-      include: { user: true }
+      where: { userId: user.id, tokenHash, usedAt: null, expiresAt: { gt: new Date() } }
     });
-    if (!record) return res.status(400).json({ message: 'Token inválido ou expirado.' });
+    if (!record) return res.status(400).json({ message: 'Código inválido ou expirado.' });
 
     const passwordHash = await bcrypt.hash(password, 10);
-    await prisma.user.update({ where: { id: record.userId }, data: { passwordHash } });
+    await prisma.user.update({ where: { id: user.id }, data: { passwordHash } });
     await prisma.passwordResetToken.update({ where: { id: record.id }, data: { usedAt: new Date() } });
     return res.json({ message: 'Senha redefinida com sucesso.' });
   } catch (error) {
     return res.status(500).json({ message: 'Não foi possível redefinir a senha.' });
+  }
+});
+
+router.post('/change-password', authRequired, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) return res.status(400).json({ message: 'Informe a senha atual e a nova senha.' });
+    const passwordOk = await bcrypt.compare(currentPassword, req.user.passwordHash);
+    if (!passwordOk) return res.status(400).json({ message: 'Senha atual inválida.' });
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+    await prisma.user.update({ where: { id: req.user.id }, data: { passwordHash } });
+    return res.json({ message: 'Senha alterada com sucesso.' });
+  } catch (error) {
+    return res.status(500).json({ message: 'Não foi possível alterar a senha.' });
   }
 });
 
@@ -180,9 +165,7 @@ router.get('/me', authRequired, async (req, res) => {
     role: req.user.role,
     companyName: req.user.companyName,
     subscription: activeSubscription,
-    metrics: req.user.role === 'ADMIN'
-      ? { favoriteCount, listingCount }
-      : { favoriteCount }
+    metrics: req.user.role === 'ADMIN' ? { favoriteCount, listingCount } : { favoriteCount }
   });
 });
 

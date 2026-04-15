@@ -204,9 +204,8 @@ function Hero({ listingsCount, onOpenAuth, setCurrentView }) {
 }
 
 function AuthPanel({ onAuthSuccess }) {
-  const initialMode = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('token') ? 'reset' : 'login';
-  const [mode, setMode] = useState(initialMode);
-  const [form, setForm] = useState({ name: '', email: '', phone: '', password: '', resetPassword: '', resetPasswordConfirm: '', token: typeof window !== 'undefined' ? (new URLSearchParams(window.location.search).get('token') || '') : '' });
+  const [mode, setMode] = useState('login');
+  const [form, setForm] = useState({ name: '', email: '', phone: '', password: '', resetPassword: '', resetPasswordConfirm: '', code: '' });
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -221,13 +220,13 @@ function AuthPanel({ onAuthSuccess }) {
         setMessage('Cadastro concluído. Agora faça o login.');
       } else if (mode === 'forgot') {
         const data = await api('/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email: form.email }) });
-        setMessage(data.message || 'Se o e-mail existir, enviamos o link de recuperação.');
+        setMode('reset');
+        setMessage(data.message || 'Se o e-mail existir, enviamos um código de recuperação.');
       } else if (mode === 'reset') {
         if (form.resetPassword !== form.resetPasswordConfirm) throw new Error('As senhas não conferem.');
-        const data = await api('/auth/reset-password', { method: 'POST', body: JSON.stringify({ token: form.token, password: form.resetPassword }) });
+        const data = await api('/auth/reset-password', { method: 'POST', body: JSON.stringify({ email: form.email, code: form.code, password: form.resetPassword }) });
         setMode('login');
-        setForm({ ...form, password: '', resetPassword: '', resetPasswordConfirm: '', token: '' });
-        if (typeof window !== 'undefined') window.history.replaceState({}, '', window.location.pathname);
+        setForm({ ...form, password: '', resetPassword: '', resetPasswordConfirm: '', code: '' });
         setMessage(data.message || 'Senha atualizada com sucesso. Faça o login.');
       } else {
         const data = await api('/auth/login', { method: 'POST', body: JSON.stringify({ email: form.email, password: form.password }) });
@@ -252,10 +251,10 @@ function AuthPanel({ onAuthSuccess }) {
         {mode === 'register' && <input placeholder="Telefone / WhatsApp" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />}
         {(mode === 'login' || mode === 'register' || mode === 'forgot') && <input placeholder="E-mail" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />}
         {mode === 'login' && <input placeholder="Senha" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />}
-        {mode === 'reset' && <input placeholder="Token de recuperação" value={form.token} onChange={(e) => setForm({ ...form, token: e.target.value })} />}
+        {mode === 'reset' && <input placeholder="Código recebido por e-mail" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} />}
         {mode === 'reset' && <input placeholder="Nova senha" type="password" value={form.resetPassword} onChange={(e) => setForm({ ...form, resetPassword: e.target.value })} />}
         {mode === 'reset' && <input placeholder="Confirmar nova senha" type="password" value={form.resetPasswordConfirm} onChange={(e) => setForm({ ...form, resetPasswordConfirm: e.target.value })} />}
-        <button type="submit" disabled={loading}>{loading ? 'Aguarde...' : mode === 'login' ? 'Entrar' : mode === 'register' ? 'Cadastrar' : mode === 'forgot' ? 'Enviar link' : 'Redefinir senha'}</button>
+        <button type="submit" disabled={loading}>{loading ? 'Aguarde...' : mode === 'login' ? 'Entrar' : mode === 'register' ? 'Cadastrar' : mode === 'forgot' ? 'Enviar código' : 'Redefinir senha'}</button>
       </form>
       {mode === 'login' && <button className="link-button" onClick={() => setMode('forgot')}>Esqueci minha senha</button>}
       {message && <p className="message">{message}</p>}
@@ -654,7 +653,7 @@ function ListingForm({ auth, editing, onSaved, onCancel }) {
   );
 }
 
-function Dashboard({ auth, listings, favorites, leads, subscription, plans, payments, checkoutState, paymentConfig, myStore, onSaveStore, onRefresh, onEdit, onOpen, onDelete, onToggleFavorite, onLeadStatusChange, onSubscribe, onFeatureListing, onRefreshPayment, onOpenPlans, onOpenStore }) {
+function Dashboard({ auth, listings, favorites, leads, subscription, plans, payments, checkoutState, paymentConfig, myStore, onSaveStore, onRefresh, onEdit, onOpen, onDelete, onToggleFavorite, onLeadStatusChange, onSubscribe, onFeatureListing, onRefreshPayment, onOpenPlans, onOpenStore, onChangePassword }) {
   const upgradePlans = getUpgradePlans(plans, subscription);
   const isParticular = getCurrentPlanSlug(subscription) === 'particular' || !subscription;
   const canManageStore = ['lojista', 'premium'].includes(getCurrentPlanSlug(subscription));
@@ -811,6 +810,17 @@ function Dashboard({ auth, listings, favorites, leads, subscription, plans, paym
           </div>
         )}
       </section>
+
+      <section className="card">
+        <div className="section-title">
+          <div>
+            <h2>Segurança da conta</h2>
+            <p>Altere sua senha sempre que precisar, com validação da senha atual.</p>
+          </div>
+        </div>
+        <ChangePasswordCard onSubmit={onChangePassword} />
+      </section>
+
       <section className="card">
         <div className="section-title">
           <div>
@@ -836,6 +846,42 @@ function Dashboard({ auth, listings, favorites, leads, subscription, plans, paym
         </div>
       </section>
     </div>
+  );
+}
+
+
+function ChangePasswordCard({ onSubmit }) {
+  const [form, setForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
+  const [message, setMessage] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setMessage('');
+    if (form.newPassword !== form.confirmPassword) {
+      setMessage('As novas senhas não conferem.');
+      return;
+    }
+    try {
+      setSaving(true);
+      const data = await onSubmit(form);
+      setMessage(data?.message || 'Senha alterada com sucesso.');
+      setForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="grid-form">
+      <input placeholder="Senha atual" type="password" value={form.currentPassword} onChange={(e) => setForm({ ...form, currentPassword: e.target.value })} />
+      <input placeholder="Nova senha" type="password" value={form.newPassword} onChange={(e) => setForm({ ...form, newPassword: e.target.value })} />
+      <input placeholder="Confirmar nova senha" type="password" value={form.confirmPassword} onChange={(e) => setForm({ ...form, confirmPassword: e.target.value })} />
+      <button type="submit" disabled={saving}>{saving ? 'Salvando...' : 'Alterar senha'}</button>
+      {message && <p className="message">{message}</p>}
+    </form>
   );
 }
 
@@ -1436,6 +1482,10 @@ export default function App() {
     }
   };
 
+  const handleChangePassword = async ({ currentPassword, newPassword }) => {
+    return api('/auth/change-password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) }, auth.token);
+  };
+
   const openListing = async (listing) => {
     try {
       const data = await api(`/listings/${listing.id}`, {
@@ -1503,6 +1553,7 @@ export default function App() {
               onRefreshPayment={refreshPaymentStatus}
               onOpenPlans={() => setCurrentView('planos')}
               onOpenStore={() => openStore(auth.user.id)}
+              onChangePassword={handleChangePassword}
             />
           </>
         )}
