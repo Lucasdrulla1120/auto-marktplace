@@ -9,7 +9,6 @@ const adminRoutes = require('./routes/admin');
 const plansRoutes = require('./routes/plans');
 const paymentsRoutes = require('./routes/payments');
 const storesRoutes = require('./routes/stores');
-const chatRoutes = require('./routes/chat');
 
 const app = express();
 const PORT = Number(process.env.PORT || 4000);
@@ -41,7 +40,7 @@ app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', message: 'API online', timestamp: new Date().toISOString(), version: 'v3.9-local-marketplace-chat-ready' });
+  res.json({ status: 'ok', message: 'API online', timestamp: new Date().toISOString(), version: 'v3.9.1-local-marketplace-whatsapp-reset-ready' });
 });
 
 app.use('/api/auth', authRoutes);
@@ -50,7 +49,6 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/plans', plansRoutes);
 app.use('/api/payments', paymentsRoutes);
 app.use('/api/stores', storesRoutes);
-app.use('/api/chat', chatRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ message: 'Rota não encontrada.' });

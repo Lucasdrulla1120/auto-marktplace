@@ -32,7 +32,7 @@ async function main() {
       phone: '(00) 90000-0000',
       passwordHash: adminPassword,
       role: 'ADMIN',
-      companyName: 'Auto Marketplace Admin'
+      companyName: 'Local Marktplace Admin'
     }
   });
 

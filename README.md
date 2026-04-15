@@ -1,4 +1,4 @@
-# Auto Marketplace V3.2 Comercial
+# Local Marktplace V3.2 Comercial
 
 Versão focada em monetização e experiência comercial.
 
@@ -64,3 +64,9 @@ MP_WEBHOOK_SECRET="seu-segredo-opcional"
 4. O painel operacional e Mercado Pago preparado confirma o Pix via webhook
 5. O sistema coloca a assinatura em **Em ativação** e depois **Ativo** automaticamente
 6. O admin pode ajustar os preços no próprio painel
+
+
+## V3.9.1
+- contato 100% via WhatsApp com mensagem padrão "Olá vi seu anuncio no Local Marktplace e gostaria de mais informações !"
+- recuperação de senha por token com envio por e-mail quando SMTP estiver configurado
+- chat interno removido da interface
