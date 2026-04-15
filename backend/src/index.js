@@ -40,7 +40,7 @@ app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', message: 'API online', timestamp: new Date().toISOString(), version: 'v3.6-render-cors-fixed' });
+  res.json({ status: 'ok', message: 'API online', timestamp: new Date().toISOString(), version: 'v3.7-production-mercadopago-ready' });
 });
 
 app.use('/api/auth', authRoutes);

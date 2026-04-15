@@ -137,8 +137,8 @@ function Header({ auth, onLogout, currentView, setCurrentView }) {
   return (
     <header className="topbar">
       <div>
-        <h1>Auto Marketplace V3.6 Deploy Ready</h1>
-        <p>Fluxo de upgrade por Pix mais limpo, filtros enxutos e página pública da loja com seus anúncios.</p>
+        <h1>Auto Marketplace V3.7 Production Ready</h1>
+        <p>Base pronta para produção com Mercado Pago, checkout Pix, webhook e vitrine comercial mais limpa.</p>
       </div>
       <nav className="topnav">
         <button className={currentView === 'home' ? 'active' : ''} onClick={() => setCurrentView('home')}>Anúncios</button>

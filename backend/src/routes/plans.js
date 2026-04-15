@@ -70,10 +70,38 @@ router.post('/subscribe', authRequired, async (req, res) => {
   const plan = await prisma.plan.findUnique({ where: { id: Number(planId) } });
   if (!plan || !plan.isActive) return res.status(404).json({ message: 'Plano não encontrado ou inativo.' });
 
-  await prisma.subscription.updateMany({
-    where: { userId: req.user.id, status: { in: ['ACTIVE', 'ACTIVATING', 'PENDING_PAYMENT', 'PAST_DUE'] } },
-    data: { status: 'SUPERSEDED' }
+  const currentActiveSubscription = await prisma.subscription.findFirst({
+    where: { userId: req.user.id, status: { in: ['ACTIVE', 'ACTIVATING', 'PAST_DUE'] } },
+    include: { plan: true },
+    orderBy: { startedAt: 'desc' }
   });
+
+  if (currentActiveSubscription?.planId === plan.id) {
+    return res.status(400).json({ message: 'Este já é o seu plano atual.' });
+  }
+
+  const existingPending = await prisma.subscription.findFirst({
+    where: { userId: req.user.id, planId: plan.id, status: 'PENDING_PAYMENT' },
+    include: { plan: true },
+    orderBy: { startedAt: 'desc' }
+  });
+
+  if (existingPending) {
+    const latestPayment = await prisma.payment.findFirst({ where: { subscriptionId: existingPending.id }, orderBy: { createdAt: 'desc' } });
+    return res.status(200).json({
+      subscription: existingPending,
+      payment: latestPayment,
+      checkout: latestPayment ? {
+        mode: latestPayment.provider === 'MERCADO_PAGO' ? 'MERCADO_PAGO_PIX' : 'LOCAL_SIMULATION',
+        instructions: 'Você já possui uma cobrança pendente para este plano.',
+        pixCode: latestPayment.pixCode,
+        pixQrBase64: latestPayment.pixQrBase64,
+        checkoutUrl: latestPayment.checkoutUrl,
+        paymentId: latestPayment.id,
+      } : null,
+      message: 'Você já possui um upgrade pendente para este plano.'
+    });
+  }
 
   const externalRef = makeExternalRef('PLAN', req.user.id);
   const subscription = await prisma.subscription.create({

@@ -1,9 +1,72 @@
 const express = require('express');
 const prisma = require('../utils/prisma');
 const { authRequired, adminRequired } = require('../middleware/auth');
-const { createPixPayment, makeExternalRef, verifyWebhookSignature, hasMercadoPagoConfig } = require('../utils/mercadoPago');
+const { createPixPayment, makeExternalRef, verifyWebhookSignature, hasMercadoPagoConfig, getPaymentById, normalizePaymentStatus } = require('../utils/mercadoPago');
 
 const router = express.Router();
+
+async function activatePlanPayment(payment) {
+  if (!payment?.subscriptionId) return null;
+  const subscription = await prisma.subscription.findUnique({ where: { id: payment.subscriptionId }, include: { plan: true } });
+  if (!subscription) return null;
+
+  await prisma.subscription.updateMany({
+    where: {
+      userId: subscription.userId,
+      id: { not: subscription.id },
+      status: { in: ['ACTIVE', 'ACTIVATING', 'PENDING_PAYMENT', 'PAST_DUE'] },
+    },
+    data: { status: 'SUPERSEDED' }
+  });
+
+  return prisma.subscription.update({
+    where: { id: subscription.id },
+    data: {
+      status: 'ACTIVE',
+      paymentMethod: payment.provider === 'MERCADO_PAGO' ? 'MERCADO_PAGO_PIX' : payment.provider,
+      startedAt: subscription.startedAt || new Date(),
+      expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30),
+    },
+    include: { plan: true }
+  });
+}
+
+async function activateFeaturedPayment(payment) {
+  if (!payment?.listingId) return null;
+  return prisma.listing.update({
+    where: { id: payment.listingId },
+    data: { isFeatured: true, featuredUntil: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30) }
+  });
+}
+
+async function syncPaymentStatus(paymentId) {
+  const payment = await prisma.payment.findUnique({ where: { id: Number(paymentId) }, include: { subscription: true, listing: true } });
+  if (!payment) return null;
+
+  let nextStatus = payment.status;
+  let paidAt = payment.paidAt;
+
+  if (payment.provider === 'MERCADO_PAGO' && payment.providerRef && hasMercadoPagoConfig()) {
+    const remote = await getPaymentById(payment.providerRef);
+    nextStatus = normalizePaymentStatus(remote.status);
+    paidAt = nextStatus === 'PAID' ? new Date(remote.date_approved || Date.now()) : null;
+  }
+
+  const updated = await prisma.payment.update({
+    where: { id: payment.id },
+    data: { status: nextStatus, paidAt }
+  });
+
+  if (updated.type === 'PLAN' && updated.status === 'PAID') {
+    await activatePlanPayment(updated);
+  }
+
+  if (updated.type === 'FEATURED' && updated.status === 'PAID') {
+    await activateFeaturedPayment(updated);
+  }
+
+  return updated;
+}
 
 router.get('/config', (req, res) => {
   res.json({
@@ -11,6 +74,7 @@ router.get('/config', (req, res) => {
     provider: hasMercadoPagoConfig() ? 'MERCADO_PAGO' : 'LOCAL_SIMULATION',
     webhookConfigured: !!process.env.MP_WEBHOOK_URL,
     publicKeyConfigured: !!process.env.MP_PUBLIC_KEY,
+    productionReady: !!(process.env.MP_ACCESS_TOKEN && process.env.MP_WEBHOOK_URL && process.env.APP_URL),
   });
 });
 
@@ -49,7 +113,7 @@ router.post('/feature-listing', authRequired, async (req, res) => {
       listingId: listing.id,
       type: 'FEATURED',
       amount,
-      status: checkout.status?.toUpperCase?.() || 'PENDING',
+      status: normalizePaymentStatus(checkout.status),
       provider: checkout.provider,
       providerRef: checkout.providerRef || null,
       externalRef,
@@ -65,18 +129,38 @@ router.post('/feature-listing', authRequired, async (req, res) => {
 });
 
 router.post('/webhook/mercadopago', async (req, res) => {
-  await prisma.webhookEvent.create({
+  const validSignature = verifyWebhookSignature(req);
+  const externalId = req.body.data?.id ? String(req.body.data.id) : null;
+  const event = await prisma.webhookEvent.create({
     data: {
       provider: 'MERCADO_PAGO',
       topic: req.query.topic ? String(req.query.topic) : null,
       action: req.body.action ? String(req.body.action) : null,
-      externalId: req.body.data?.id ? String(req.body.data.id) : null,
+      externalId,
       payload: JSON.stringify(req.body),
       processed: false,
-      processingNote: verifyWebhookSignature(req) ? 'Recebido para processamento.' : 'Assinatura não validada.',
+      processingNote: validSignature ? 'Recebido para processamento.' : 'Assinatura não validada.',
     }
   });
-  res.json({ received: true });
+
+  if (!validSignature) {
+    return res.status(401).json({ received: false, message: 'Assinatura inválida.' });
+  }
+
+  try {
+    if (externalId) {
+      const localPayment = await prisma.payment.findFirst({ where: { providerRef: externalId } });
+      if (localPayment) {
+        await syncPaymentStatus(localPayment.id);
+      }
+    }
+
+    await prisma.webhookEvent.update({ where: { id: event.id }, data: { processed: true, processingNote: 'Evento processado com sucesso.' } });
+    return res.json({ received: true });
+  } catch (error) {
+    await prisma.webhookEvent.update({ where: { id: event.id }, data: { processingNote: error.message || 'Falha ao processar evento.' } });
+    return res.status(500).json({ received: false, message: 'Falha ao processar webhook.' });
+  }
 });
 
 router.get('/admin/all', authRequired, adminRequired, async (req, res) => {
@@ -91,33 +175,26 @@ router.get('/admin/all', authRequired, adminRequired, async (req, res) => {
   res.json(payments);
 });
 
-
 router.post('/:id/refresh', authRequired, async (req, res) => {
   const payment = await prisma.payment.findUnique({ where: { id: Number(req.params.id) }, include: { subscription: true, listing: true } });
   if (!payment) return res.status(404).json({ message: 'Pagamento não encontrado.' });
   if (payment.userId !== req.user.id && req.user.role !== 'ADMIN') return res.status(403).json({ message: 'Sem permissão para atualizar este pagamento.' });
 
-  if (payment.status === 'PAID' && payment.subscriptionId) {
-    await prisma.subscription.update({ where: { id: payment.subscriptionId }, data: { status: 'ACTIVE', paymentMethod: payment.provider || 'MERCADO_PAGO_PIX' } }).catch(() => null);
-  }
-
-  const refreshed = await prisma.payment.findUnique({ where: { id: payment.id } });
+  const refreshed = await syncPaymentStatus(payment.id);
   res.json(refreshed);
 });
 
 router.patch('/admin/:id/status', authRequired, adminRequired, async (req, res) => {
   const { status } = req.body;
-  const payment = await prisma.payment.update({ where: { id: Number(req.params.id) }, data: { status, paidAt: status === 'PAID' ? new Date() : null } });
+  const normalized = normalizePaymentStatus(status);
+  const payment = await prisma.payment.update({ where: { id: Number(req.params.id) }, data: { status: normalized, paidAt: normalized === 'PAID' ? new Date() : null } });
 
-  if (payment.type === 'FEATURED' && status === 'PAID' && payment.listingId) {
-    await prisma.listing.update({
-      where: { id: payment.listingId },
-      data: { isFeatured: true, featuredUntil: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30) }
-    });
+  if (payment.type === 'FEATURED' && normalized === 'PAID') {
+    await activateFeaturedPayment(payment);
   }
 
-  if (payment.type === 'PLAN' && status === 'PAID' && payment.subscriptionId) {
-    await prisma.subscription.update({ where: { id: payment.subscriptionId }, data: { status: 'ACTIVE', paymentMethod: 'MERCADO_PAGO_PIX' } });
+  if (payment.type === 'PLAN' && normalized === 'PAID') {
+    await activatePlanPayment(payment);
   }
 
   res.json(payment);

@@ -33,7 +33,7 @@ textarea { resize: vertical; }
 .grid.three { grid-template-columns: repeat(3, minmax(0,1fr)); }
 .grid.four { grid-template-columns: repeat(4, minmax(0,1fr)); }
 .grid-form { display: grid; gap: 14px; }
-.filters { position: sticky; top: 10px; z-index: 5; }
+.filters { position: relative; top: auto; z-index: 1; }
 .listing-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; }
 .listing-card { overflow: hidden; padding: 0; }
 .thumb-wrap { position: relative; }
