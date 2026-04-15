@@ -1,6 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const prisma = require('../utils/prisma');
 const { authRequired } = require('../middleware/auth');
 
@@ -29,6 +30,17 @@ async function ensureDefaultPlanSubscription(userId, email) {
     },
     include: { plan: true }
   });
+}
+
+
+async function cleanupExpiredPasswordTokens() {
+  await prisma.passwordResetToken.deleteMany({ where: { expiresAt: { lt: new Date() } } }).catch(() => null);
+}
+
+function buildResetLink(token) {
+  const appUrl = process.env.APP_URL || process.env.FRONTEND_URL || '';
+  if (!appUrl) return token;
+  return `${appUrl.replace(/\/$/, '')}/?token=${token}`;
 }
 
 const router = express.Router();
@@ -93,6 +105,65 @@ router.post('/login', async (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ message: 'Erro ao fazer login.' });
+  }
+});
+
+
+router.post('/forgot-password', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ message: 'Informe o e-mail cadastrado.' });
+    await cleanupExpiredPasswordTokens();
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user) return res.json({ message: 'Se o e-mail existir, enviaremos um link de recuperação.' });
+
+    const plainToken = crypto.randomBytes(24).toString('hex');
+    const tokenHash = crypto.createHash('sha256').update(plainToken).digest('hex');
+    const expiresAt = new Date(Date.now() + 1000 * 60 * 30);
+    await prisma.passwordResetToken.create({ data: { userId: user.id, tokenHash, expiresAt } });
+
+    const resetLink = buildResetLink(plainToken);
+    if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+      const nodemailer = require('nodemailer');
+      const transporter = nodemailer.createTransport({
+        host: process.env.SMTP_HOST,
+        port: Number(process.env.SMTP_PORT || 587),
+        secure: String(process.env.SMTP_SECURE || 'false') === 'true',
+        auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
+      });
+      await transporter.sendMail({
+        from: process.env.SMTP_FROM || process.env.SMTP_USER,
+        to: user.email,
+        subject: 'Recuperação de senha - Local Marketplace',
+        text: `Olá, use este link para redefinir sua senha: ${resetLink}`
+      });
+      return res.json({ message: 'Enviamos um link de recuperação para o seu e-mail.' });
+    }
+
+    return res.json({ message: 'Recuperação gerada. Configure SMTP para envio automático.', resetToken: plainToken, resetLink });
+  } catch (error) {
+    return res.status(500).json({ message: 'Não foi possível iniciar a recuperação de senha.' });
+  }
+});
+
+router.post('/reset-password', async (req, res) => {
+  try {
+    const { token, password } = req.body;
+    if (!token || !password) return res.status(400).json({ message: 'Token e nova senha são obrigatórios.' });
+    await cleanupExpiredPasswordTokens();
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    const record = await prisma.passwordResetToken.findFirst({
+      where: { tokenHash, usedAt: null, expiresAt: { gt: new Date() } },
+      include: { user: true }
+    });
+    if (!record) return res.status(400).json({ message: 'Token inválido ou expirado.' });
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    await prisma.user.update({ where: { id: record.userId }, data: { passwordHash } });
+    await prisma.passwordResetToken.update({ where: { id: record.id }, data: { usedAt: new Date() } });
+    return res.json({ message: 'Senha redefinida com sucesso.' });
+  } catch (error) {
+    return res.status(500).json({ message: 'Não foi possível redefinir a senha.' });
   }
 });
 

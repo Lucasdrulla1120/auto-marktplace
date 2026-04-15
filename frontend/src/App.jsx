@@ -49,7 +49,7 @@ function normalizePhone(value = '') {
 
 function buildWhatsAppUrl(phone, title = '') {
   const digits = normalizePhone(phone);
-  const text = encodeURIComponent(`Olá! Tenho interesse no veículo ${title}. Ele ainda está disponível?`);
+  const text = encodeURIComponent('Olá vi seu anuncio no Local Marktplace e gostaria de mais informações !');
   return digits ? `https://wa.me/${digits}?text=${text}` : '#';
 }
 
@@ -198,7 +198,7 @@ function Hero({ listingsCount, onOpenAuth, setCurrentView }) {
         <span className="eyebrow">Marketplace automotivo da sua região</span>
         <h2>Compre, anuncie e converse diretamente com compradores e vendedores na sua cidade.</h2>
         <p>
-          Busca simples, fotos organizadas, chat interno no estilo classificados e contato rápido por WhatsApp para acelerar a negociação.
+          Busca simples, fotos organizadas, contato direto por WhatsApp e uma experiência local mais objetiva para acelerar a negociação.
         </p>
         <div className="actions-row wrap">
           <button onClick={() => setCurrentView('dashboard')}>Publicar anúncio</button>
@@ -216,8 +216,9 @@ function Hero({ listingsCount, onOpenAuth, setCurrentView }) {
 }
 
 function AuthPanel({ onAuthSuccess }) {
-  const [mode, setMode] = useState('login');
-  const [form, setForm] = useState({ name: '', email: '', phone: '', password: '' });
+  const initialMode = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('token') ? 'reset' : 'login';
+  const [mode, setMode] = useState(initialMode);
+  const [form, setForm] = useState({ name: '', email: '', phone: '', password: '', resetPassword: '', resetPasswordConfirm: '', token: typeof window !== 'undefined' ? (new URLSearchParams(window.location.search).get('token') || '') : '' });
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -230,6 +231,16 @@ function AuthPanel({ onAuthSuccess }) {
         await api('/auth/register', { method: 'POST', body: JSON.stringify(form) });
         setMode('login');
         setMessage('Cadastro concluído. Agora faça o login.');
+      } else if (mode === 'forgot') {
+        const data = await api('/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email: form.email }) });
+        setMessage(data.message || 'Se o e-mail existir, enviamos o link de recuperação.');
+      } else if (mode === 'reset') {
+        if (form.resetPassword !== form.resetPasswordConfirm) throw new Error('As senhas não conferem.');
+        const data = await api('/auth/reset-password', { method: 'POST', body: JSON.stringify({ token: form.token, password: form.resetPassword }) });
+        setMode('login');
+        setForm({ ...form, password: '', resetPassword: '', resetPasswordConfirm: '', token: '' });
+        if (typeof window !== 'undefined') window.history.replaceState({}, '', window.location.pathname);
+        setMessage(data.message || 'Senha atualizada com sucesso. Faça o login.');
       } else {
         const data = await api('/auth/login', { method: 'POST', body: JSON.stringify({ email: form.email, password: form.password }) });
         onAuthSuccess(data);
@@ -246,14 +257,19 @@ function AuthPanel({ onAuthSuccess }) {
       <div className="tabs">
         <button className={mode === 'login' ? 'active' : ''} onClick={() => setMode('login')}>Login</button>
         <button className={mode === 'register' ? 'active' : ''} onClick={() => setMode('register')}>Cadastro</button>
+        <button className={mode === 'forgot' ? 'active' : ''} onClick={() => setMode('forgot')}>Recuperar senha</button>
       </div>
       <form onSubmit={handleSubmit} className="grid-form">
         {mode === 'register' && <input placeholder="Nome" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />}
         {mode === 'register' && <input placeholder="Telefone / WhatsApp" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />}
-        <input placeholder="E-mail" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
-        <input placeholder="Senha" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
-        <button type="submit" disabled={loading}>{loading ? 'Aguarde...' : mode === 'login' ? 'Entrar' : 'Cadastrar'}</button>
+        {(mode === 'login' || mode === 'register' || mode === 'forgot') && <input placeholder="E-mail" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />}
+        {mode === 'login' && <input placeholder="Senha" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />}
+        {mode === 'reset' && <input placeholder="Token de recuperação" value={form.token} onChange={(e) => setForm({ ...form, token: e.target.value })} />}
+        {mode === 'reset' && <input placeholder="Nova senha" type="password" value={form.resetPassword} onChange={(e) => setForm({ ...form, resetPassword: e.target.value })} />}
+        {mode === 'reset' && <input placeholder="Confirmar nova senha" type="password" value={form.resetPasswordConfirm} onChange={(e) => setForm({ ...form, resetPasswordConfirm: e.target.value })} />}
+        <button type="submit" disabled={loading}>{loading ? 'Aguarde...' : mode === 'login' ? 'Entrar' : mode === 'register' ? 'Cadastrar' : mode === 'forgot' ? 'Enviar link' : 'Redefinir senha'}</button>
       </form>
+      {mode === 'login' && <button className="link-button" onClick={() => setMode('forgot')}>Esqueci minha senha</button>}
       {message && <p className="message">{message}</p>}
     </section>
   );
@@ -380,7 +396,7 @@ function Gallery({ images, title }) {
   );
 }
 
-function DetailModal({ listing, auth, onClose, onToggleFavorite, refresh, relatedListings, openListing, onStartChat }) {
+function DetailModal({ listing, auth, onClose, onToggleFavorite, refresh, relatedListings, openListing }) {
   const [leadForm, setLeadForm] = useState({ name: '', phone: '', message: `Olá! Tenho interesse no veículo ${listing.title}.` });
   const [leadMessage, setLeadMessage] = useState('');
   const whatsappUrl = buildWhatsAppUrl(listing.phone, listing.title);
@@ -430,14 +446,13 @@ function DetailModal({ listing, auth, onClose, onToggleFavorite, refresh, relate
                   <button className="ghost" onClick={() => onToggleFavorite(listing)}>
                     {listing.isFavorite ? 'Remover dos favoritos' : 'Salvar nos favoritos'}
                   </button>
-                  {auth.user.id !== listing.user?.id && <button onClick={() => onStartChat(listing)}>Conversar no chat</button>}
-                </>
+                                  </>
               )}
             </div>
           </div>
           <form className="card lead-box" onSubmit={sendLead}>
             <h3>Enviar interesse ao anunciante</h3>
-            <p className="subtle">O contato principal é por WhatsApp, mas esse formulário também cai direto no painel do vendedor.</p>
+            <p className="subtle">O contato principal é por WhatsApp. Use o botão acima para falar direto com o anunciante.</p>
             <input placeholder="Seu nome" value={leadForm.name} onChange={(e) => setLeadForm({ ...leadForm, name: e.target.value })} />
             <input placeholder="Seu telefone / WhatsApp" value={leadForm.phone} onChange={(e) => setLeadForm({ ...leadForm, phone: e.target.value })} />
             <textarea placeholder="Mensagem" value={leadForm.message} onChange={(e) => setLeadForm({ ...leadForm, message: e.target.value })} rows={5} />
@@ -651,74 +666,7 @@ function ListingForm({ auth, editing, onSaved, onCancel }) {
   );
 }
 
-function ChatInbox({ auth, conversations, activeConversation, chatDraft, setChatDraft, onSelectConversation, onSendChat, onOpenListing }) {
-  return (
-    <section className="card">
-      <div className="section-title">
-        <div>
-          <h2>Chat de negociações</h2>
-          <p>Converse como em marketplaces de classificados, sem sair da plataforma.</p>
-        </div>
-      </div>
-      <div className="chat-layout">
-        <aside className="chat-sidebar">
-          {conversations.map((conversation) => {
-            const peer = getConversationPeer(conversation, auth.user.id);
-            const lastMessage = conversation.messages?.[conversation.messages.length - 1];
-            return (
-              <button key={conversation.id} type="button" className={`chat-thread ${activeConversation?.id === conversation.id ? 'active' : ''}`} onClick={() => onSelectConversation(conversation.id)}>
-                <div>
-                  <strong>{peer?.storeName || peer?.name || 'Contato'}</strong>
-                  <span>{conversation.listing?.title || 'Anúncio'}</span>
-                </div>
-                <small>{lastMessage?.content?.slice(0, 70) || 'Conversa iniciada.'}</small>
-                <div className="chat-thread-meta">
-                  <span>{formatConversationDate(lastMessage?.createdAt || conversation.updatedAt)}</span>
-                  {!!conversation._count?.messages && <span className="badge-pill">{conversation._count.messages} nova(s)</span>}
-                </div>
-              </button>
-            );
-          })}
-          {conversations.length === 0 && <p className="empty-inline">Nenhuma conversa ainda. Abra um anúncio e clique em conversar.</p>}
-        </aside>
-        <div className="chat-pane">
-          {activeConversation ? (
-            <>
-              <div className="chat-pane-head">
-                <div>
-                  <h3>{getConversationPeer(activeConversation, auth.user.id)?.storeName || getConversationPeer(activeConversation, auth.user.id)?.name || 'Conversa'}</h3>
-                  <p>{activeConversation.listing?.title || 'Negociação em andamento'}</p>
-                </div>
-                <div className="actions-row wrap">
-                  {activeConversation.listing && <button className="ghost" onClick={() => onOpenListing(activeConversation.listing)}>Abrir anúncio</button>}
-                </div>
-              </div>
-              <div className="chat-messages">
-                {activeConversation.messages?.map((msg) => (
-                  <div key={msg.id} className={`chat-bubble ${msg.senderId === auth.user.id ? 'mine' : ''}`}>
-                    <p>{msg.content}</p>
-                    <span>{formatConversationDate(msg.createdAt)}</span>
-                  </div>
-                ))}
-              </div>
-              <form className="chat-compose" onSubmit={(e) => { e.preventDefault(); onSendChat(activeConversation.id); }}>
-                <textarea rows={3} placeholder="Digite sua mensagem..." value={chatDraft} onChange={(e) => setChatDraft(e.target.value)} />
-                <div className="actions-row wrap"><button type="submit">Enviar mensagem</button></div>
-              </form>
-            </>
-          ) : (
-            <div className="chat-empty">
-              <h3>Selecione uma conversa</h3>
-              <p>Quando alguém falar com você sobre um anúncio, a conversa aparece aqui.</p>
-            </div>
-          )}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function Dashboard({ auth, listings, favorites, leads, conversations, activeConversation, chatDraft, setChatDraft, onSelectConversation, onSendChat, subscription, plans, payments, checkoutState, paymentConfig, myStore, onSaveStore, onRefresh, onEdit, onOpen, onDelete, onToggleFavorite, onLeadStatusChange, onSubscribe, onFeatureListing, onRefreshPayment, onOpenPlans, onOpenStore }) {
+function Dashboard({ auth, listings, favorites, leads, subscription, plans, payments, checkoutState, paymentConfig, myStore, onSaveStore, onRefresh, onEdit, onOpen, onDelete, onToggleFavorite, onLeadStatusChange, onSubscribe, onFeatureListing, onRefreshPayment, onOpenPlans, onOpenStore }) {
   const upgradePlans = getUpgradePlans(plans, subscription);
   const isParticular = getCurrentPlanSlug(subscription) === 'particular' || !subscription;
   const canManageStore = ['lojista', 'premium'].includes(getCurrentPlanSlug(subscription));
@@ -812,7 +760,28 @@ function Dashboard({ auth, listings, favorites, leads, conversations, activeConv
           </div>
         </section>
       )}
-      <ChatInbox auth={auth} conversations={conversations} activeConversation={activeConversation} chatDraft={chatDraft} setChatDraft={setChatDraft} onSelectConversation={onSelectConversation} onSendChat={onSendChat} onOpenListing={onOpen} />
+      <section className="card">
+        <div className="section-title">
+          <div>
+            <h2>Contato por WhatsApp</h2>
+            <p>Todos os contatos acontecem pelo WhatsApp para manter a negociação mais simples e rápida.</p>
+          </div>
+        </div>
+        <div className="lead-list">
+          {leads.length ? leads.map((lead) => (
+            <article key={lead.id} className="card">
+              <div className="between">
+                <div>
+                  <strong>{lead.name}</strong>
+                  <p>{lead.listing?.title || 'Anúncio'}</p>
+                </div>
+                <a className="button-link success" href={buildWhatsAppUrl(lead.phone || lead.listing?.phone, lead.listing?.title || '')} target="_blank" rel="noreferrer">Chamar no WhatsApp</a>
+              </div>
+              <p>{lead.message}</p>
+            </article>
+          )) : <p className="subtle">Quando alguém enviar interesse, você verá os contatos aqui para continuar pelo WhatsApp.</p>}
+        </div>
+      </section>
       <section className="card plan-flow-card">
         <div className="section-title">
           <div>
@@ -1117,64 +1086,14 @@ export default function App() {
   const [editingListing, setEditingListing] = useState(null);
   const [message, setMessage] = useState('');
   const [adminData, setAdminData] = useState({ dashboard: { users: 0, listings: 0, pending: 0, leads: 0, featured: 0, activeSubscriptions: 0 }, listings: [], leads: [], subscriptions: [], payments: [], plans: [], users: [] });
-  const [conversations, setConversations] = useState([]);
-  const [activeConversation, setActiveConversation] = useState(null);
-  const [chatDraft, setChatDraft] = useState('');
 
   useEffect(() => {
     localStorage.setItem('automarket-auth', JSON.stringify(auth));
   }, [auth]);
 
-  const fetchConversations = async () => {
-    if (!auth.user) return;
-    try {
-      const data = await api('/chat', {}, auth.token);
-      setConversations(data);
-      if (activeConversation?.id) {
-        const current = data.find((item) => item.id === activeConversation.id);
-        if (current) setActiveConversation(current);
-      }
-    } catch (error) {
-      setMessage(error.message);
-    }
-  };
 
-  const openConversation = async (conversationId) => {
-    try {
-      const data = await api(`/chat/${conversationId}`, {}, auth.token);
-      setActiveConversation(data);
-      setCurrentView('dashboard');
-      await fetchConversations();
-    } catch (error) {
-      setMessage(error.message);
-    }
-  };
 
-  const startConversation = async (listing) => {
-    if (!auth.token) { setCurrentView('auth'); return; }
-    try {
-      const data = await api('/chat/start', { method: 'POST', body: JSON.stringify({ listingId: listing.id }) }, auth.token);
-      setActiveConversation(data);
-      setCurrentView('dashboard');
-      setSelectedListing(null);
-      setChatDraft('');
-      await fetchConversations();
-    } catch (error) {
-      setMessage(error.message);
-    }
-  };
 
-  const sendChatMessage = async (conversationId) => {
-    if (!chatDraft.trim()) return;
-    try {
-      const data = await api(`/chat/${conversationId}/messages`, { method: 'POST', body: JSON.stringify({ content: chatDraft }) }, auth.token);
-      setActiveConversation(data);
-      setChatDraft('');
-      await fetchConversations();
-    } catch (error) {
-      setMessage(error.message);
-    }
-  };
 
   const fetchListings = async () => {
     try {
@@ -1291,7 +1210,6 @@ export default function App() {
       fetchSellerLeads();
       fetchSubscription();
       fetchMyStore();
-      fetchConversations();
       if (auth.user.role === 'ADMIN') fetchAdmin();
     } else {
       setMyListings([]);
@@ -1299,8 +1217,6 @@ export default function App() {
       setSellerLeads([]);
       setSubscription(null);
       setMyStore({ canManageStore: false, planSlug: 'particular', planName: 'Particular', profile: storeProfileInitial });
-      setConversations([]);
-      setActiveConversation(null);
       setChatDraft('');
     }
   }, [auth.user]);
@@ -1378,7 +1294,6 @@ export default function App() {
       await fetchSellerLeads();
       await fetchSubscription();
       await fetchMyStore();
-      await fetchConversations();
       if (auth.user.role === 'ADMIN') await fetchAdmin();
     }
   };
@@ -1583,12 +1498,6 @@ export default function App() {
               listings={myListings}
               favorites={favoriteListings}
               leads={sellerLeads}
-              conversations={conversations}
-              activeConversation={activeConversation}
-              chatDraft={chatDraft}
-              setChatDraft={setChatDraft}
-              onSelectConversation={openConversation}
-              onSendChat={sendChatMessage}
               subscription={subscription}
               plans={plans}
               payments={payments}
@@ -1628,7 +1537,6 @@ export default function App() {
           refresh={refreshAll}
           relatedListings={relatedListings}
           openListing={openListing}
-          onStartChat={startConversation}
         />
       )}
     </div>
