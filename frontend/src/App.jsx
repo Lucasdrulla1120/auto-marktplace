@@ -2,6 +2,22 @@ import React, { useEffect, useMemo, useState } from 'react';
 
 const API_URL = (import.meta.env.VITE_API_URL || 'http://127.0.0.1:4000/api').replace(/\/$/, '');
 const emptyAuth = { token: '', user: null };
+const CACHE_KEYS = { listings: 'lm-cache-listings', plans: 'lm-cache-plans', stores: 'lm-cache-stores' };
+
+function readCache(key, fallback = []) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeCache(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {}
+}
 const VEHICLE_DATA = {
   Chevrolet: ['Agile', 'Astra', 'Blazer', 'Bolt', 'Camaro', 'Celta', 'Classic', 'Cobalt', 'Corsa', 'Cruze', 'Equinox', 'Joy', 'Kadett', 'Meriva', 'Montana', 'Onix', 'Onix Plus', 'Omega', 'Prisma', 'S10', 'Silverado', 'Sonic', 'Spin', 'Tracker', 'Trailblazer', 'Vectra', 'Zafira'],
   Citroen: ['Aircross', 'Basalt', 'Berlingo', 'C3', 'C3 Aircross', 'C4', 'C4 Cactus', 'C4 Lounge', 'C5', 'Jumpy'],
@@ -117,16 +133,45 @@ const storeProfileInitial = {
   storeCity: '', storeNeighborhood: '', storeWhatsapp: '', storeInstagram: '', storeWebsite: '', storeIsActive: true
 };
 
-async function api(path, options = {}, token = '') {
+async function api(path, options = {}, token = '', config = {}) {
   const headers = {
     'Content-Type': 'application/json',
     ...(options.headers || {}),
   };
   if (token) headers.Authorization = `Bearer ${token}`;
-  const response = await fetch(`${API_URL}${path}`, { ...options, headers });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.message || 'Erro na requisição.');
-  return data;
+
+  const method = (options.method || 'GET').toUpperCase();
+  const retryable = method === 'GET' || config.retry === true;
+  const retries = config.retries ?? (retryable ? 2 : 0);
+  const timeoutMs = config.timeoutMs ?? 12000;
+
+  let lastError;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(`${API_URL}${path}`, { ...options, headers, signal: controller.signal });
+      clearTimeout(timer);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const retryStatus = [408, 429, 500, 502, 503, 504].includes(response.status);
+        if (attempt < retries && retryStatus) {
+          await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
+          continue;
+        }
+        throw new Error(data.message || 'Erro na requisição.');
+      }
+      return data;
+    } catch (error) {
+      clearTimeout(timer);
+      lastError = error;
+      if (attempt < retries) {
+        await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
+        continue;
+      }
+    }
+  }
+  throw new Error(lastError?.name === 'AbortError' ? 'A requisição demorou demais. Tente novamente.' : (lastError?.message || 'Erro na requisição.'));
 }
 
 function getPrimaryImage(images = []) {
@@ -1104,13 +1149,13 @@ export default function App() {
   });
   const [currentView, setCurrentView] = useState('home');
   const [filters, setFilters] = useState({ q: '', brand: '', model: '', sortBy: 'recent' });
-  const [listings, setListings] = useState([]);
+  const [listings, setListings] = useState(() => readCache(CACHE_KEYS.listings, []));
   const [myListings, setMyListings] = useState([]);
   const [favoriteListings, setFavoriteListings] = useState([]);
   const [sellerLeads, setSellerLeads] = useState([]);
-  const [plans, setPlans] = useState([]);
+  const [plans, setPlans] = useState(() => readCache(CACHE_KEYS.plans, []));
   const [payments, setPayments] = useState([]);
-  const [stores, setStores] = useState([]);
+  const [stores, setStores] = useState(() => readCache(CACHE_KEYS.stores, []));
   const [myStore, setMyStore] = useState({ canManageStore: false, planSlug: 'particular', planName: 'Particular', profile: storeProfileInitial });
   const [paymentConfig, setPaymentConfig] = useState({ enabled: false, provider: 'LOCAL_SIMULATION' });
   const [checkoutState, setCheckoutState] = useState(null);
@@ -1139,8 +1184,16 @@ export default function App() {
         headers: auth.user ? { 'x-user-id': String(auth.user.id) } : {}
       }, auth.token);
       setListings(data);
+      writeCache(CACHE_KEYS.listings, data);
+      if (message === 'Não foi possível atualizar os anúncios. Exibindo a última versão salva.') setMessage('');
     } catch (error) {
-      setMessage(error.message);
+      const cached = readCache(CACHE_KEYS.listings, []);
+      if (cached.length) {
+        setListings(cached);
+        setMessage('Não foi possível atualizar os anúncios. Exibindo a última versão salva.');
+      } else {
+        setMessage(error.message);
+      }
     }
   };
 
@@ -1150,7 +1203,7 @@ export default function App() {
       const mine = await api('/listings/mine', {}, auth.token);
       setMyListings(mine);
     } catch (error) {
-      setMessage(error.message);
+      setMessage((prev) => prev || error.message);
     }
   };
 
@@ -1160,7 +1213,7 @@ export default function App() {
       const data = await api('/listings', { headers: { 'x-user-id': String(auth.user.id) } }, auth.token);
       setFavoriteListings(data.filter((listing) => listing.isFavorite));
     } catch (error) {
-      setMessage(error.message);
+      setMessage((prev) => prev || error.message);
     }
   };
 
@@ -1178,9 +1231,14 @@ export default function App() {
     try {
       const [data, config] = await Promise.all([api('/plans'), api('/payments/config')]);
       setPlans(data);
+      writeCache(CACHE_KEYS.plans, data);
       setPaymentConfig(config);
     } catch (error) {
-      setMessage(error.message);
+      const cached = readCache(CACHE_KEYS.plans, []);
+      if (cached.length) {
+        setPlans(cached);
+      }
+      setMessage((prev) => prev || 'Não foi possível atualizar os planos agora.');
     }
   };
 
@@ -1189,8 +1247,13 @@ export default function App() {
     try {
       const data = await api('/stores');
       setStores(data);
+      writeCache(CACHE_KEYS.stores, data);
     } catch (error) {
-      setMessage(error.message);
+      const cached = readCache(CACHE_KEYS.stores, []);
+      if (cached.length) {
+        setStores(cached);
+      }
+      setMessage((prev) => prev || 'Não foi possível atualizar as lojas agora.');
     }
   };
 
@@ -1233,7 +1296,16 @@ export default function App() {
     }
   };
 
-  useEffect(() => { fetchListings(); fetchPlans(); fetchStores(); }, []);
+  useEffect(() => {
+    fetchListings();
+    fetchPlans();
+    fetchStores();
+    const interval = setInterval(() => {
+      fetchListings();
+      fetchStores();
+    }, 45000);
+    return () => clearInterval(interval);
+  }, []);
   useEffect(() => { fetchListings(); }, [filters]);
 
   useEffect(() => {
@@ -1318,17 +1390,12 @@ export default function App() {
   };
 
   const refreshAll = async () => {
-    await fetchListings();
-    await fetchPlans();
-    await fetchStores();
+    const tasks = [fetchListings(), fetchPlans(), fetchStores()];
     if (auth.user) {
-      await fetchMyListings();
-      await fetchFavoriteListings();
-      await fetchSellerLeads();
-      await fetchSubscription();
-      await fetchMyStore();
-      if (auth.user.role === 'ADMIN') await fetchAdmin();
+      tasks.push(fetchMyListings(), fetchFavoriteListings(), fetchSellerLeads(), fetchSubscription(), fetchMyStore());
+      if (auth.user.role === 'ADMIN') tasks.push(fetchAdmin());
     }
+    await Promise.allSettled(tasks);
   };
 
   const toggleFavorite = async (listing) => {
