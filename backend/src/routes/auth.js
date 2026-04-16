@@ -51,31 +51,23 @@ function buildRecoveryCode() {
 
 const router = express.Router();
 
-function normalizeEmail(email = '') {
-  return String(email || '').trim().toLowerCase();
-}
-
-function validatePassword(password = '') {
-  return String(password || '').trim().length >= 6;
+function normalizeEmail(value = '') {
+  return String(value || '').trim().toLowerCase();
 }
 
 router.post('/register', async (req, res) => {
   try {
-    const name = String(req.body.name || '').trim();
-    const email = normalizeEmail(req.body.email);
-    const phone = String(req.body.phone || '').trim();
-    const password = String(req.body.password || '');
-    if (!name || !email || !phone || !password) {
+    const { name, email, phone, password } = req.body;
+    const normalizedEmail = normalizeEmail(email);
+    if (!name || !normalizedEmail || !phone || !password) {
       return res.status(400).json({ message: 'Preencha todos os campos obrigatórios.' });
     }
-    if (!validatePassword(password)) return res.status(400).json({ message: 'A senha precisa ter pelo menos 6 caracteres.' });
-
-    const existingUser = await prisma.user.findUnique({ where: { email } });
+    if (String(password).length < 6) return res.status(400).json({ message: 'A senha deve ter pelo menos 6 caracteres.' });
+    const existingUser = await prisma.user.findUnique({ where: { email: normalizedEmail } });
     if (existingUser) return res.status(409).json({ message: 'E-mail já cadastrado.' });
 
-    if (!validatePassword(password)) return res.status(400).json({ message: 'A nova senha precisa ter pelo menos 6 caracteres.' });
     const passwordHash = await bcrypt.hash(password, 10);
-    const user = await prisma.user.create({ data: { name, email, phone, passwordHash, role: 'USER' } });
+    const user = await prisma.user.create({ data: { name: String(name).trim(), email: normalizedEmail, phone: String(phone).trim(), passwordHash, role: 'USER' } });
     await ensureDefaultPlanSubscription(user.id, user.email);
 
     return res.status(201).json({ id: user.id, name: user.name, email: user.email, phone: user.phone, role: user.role });
@@ -86,9 +78,9 @@ router.post('/register', async (req, res) => {
 
 router.post('/login', async (req, res) => {
   try {
-    const email = normalizeEmail(req.body.email);
-    const password = String(req.body.password || '');
-    const user = await prisma.user.findUnique({ where: { email } });
+    const { email, password } = req.body;
+    const normalizedEmail = normalizeEmail(email);
+    const user = await prisma.user.findUnique({ where: { email: normalizedEmail } });
     if (!user) return res.status(401).json({ message: 'Credenciais inválidas.' });
 
     const passwordOk = await bcrypt.compare(password, user.passwordHash);
@@ -103,10 +95,11 @@ router.post('/login', async (req, res) => {
 
 router.post('/forgot-password', async (req, res) => {
   try {
-    const email = normalizeEmail(req.body.email);
-    if (!email) return res.status(400).json({ message: 'Informe o e-mail cadastrado.' });
+    const { email } = req.body;
+    const normalizedEmail = normalizeEmail(email);
+    if (!normalizedEmail) return res.status(400).json({ message: 'Informe o e-mail cadastrado.' });
     await cleanupExpiredPasswordTokens();
-    const user = await prisma.user.findUnique({ where: { email } });
+    const user = await prisma.user.findUnique({ where: { email: normalizedEmail } });
     if (!user) return res.json({ message: 'Se o e-mail existir, enviaremos um código de recuperação.' });
 
     const plainCode = buildRecoveryCode();
@@ -140,13 +133,13 @@ router.post('/forgot-password', async (req, res) => {
 
 router.post('/reset-password', async (req, res) => {
   try {
-    const email = normalizeEmail(req.body.email);
-    const code = String(req.body.code || '').trim();
-    const password = String(req.body.password || '');
-    if (!email || !code || !password) return res.status(400).json({ message: 'E-mail, código e nova senha são obrigatórios.' });
+    const { email, code, password } = req.body;
+    const normalizedEmail = normalizeEmail(email);
+    if (!normalizedEmail || !code || !password) return res.status(400).json({ message: 'E-mail, código e nova senha são obrigatórios.' });
+    if (String(password).length < 6) return res.status(400).json({ message: 'A senha deve ter pelo menos 6 caracteres.' });
     await cleanupExpiredPasswordTokens();
 
-    const user = await prisma.user.findUnique({ where: { email } });
+    const user = await prisma.user.findUnique({ where: { email: normalizedEmail } });
     if (!user) return res.status(400).json({ message: 'Código inválido ou expirado.' });
 
     const tokenHash = crypto.createHash('sha256').update(String(code)).digest('hex');
@@ -166,12 +159,11 @@ router.post('/reset-password', async (req, res) => {
 
 router.post('/change-password', authRequired, async (req, res) => {
   try {
-    const currentPassword = String(req.body.currentPassword || '');
-    const newPassword = String(req.body.newPassword || '');
+    const { currentPassword, newPassword } = req.body;
     if (!currentPassword || !newPassword) return res.status(400).json({ message: 'Informe a senha atual e a nova senha.' });
+    if (String(newPassword).length < 6) return res.status(400).json({ message: 'A nova senha deve ter pelo menos 6 caracteres.' });
     const passwordOk = await bcrypt.compare(currentPassword, req.user.passwordHash);
     if (!passwordOk) return res.status(400).json({ message: 'Senha atual inválida.' });
-    if (!validatePassword(newPassword)) return res.status(400).json({ message: 'A nova senha precisa ter pelo menos 6 caracteres.' });
     const passwordHash = await bcrypt.hash(newPassword, 10);
     await prisma.user.update({ where: { id: req.user.id }, data: { passwordHash } });
     return res.json({ message: 'Senha alterada com sucesso.' });
@@ -187,38 +179,41 @@ router.put('/me', authRequired, async (req, res) => {
     const email = normalizeEmail(req.body.email);
     const phone = String(req.body.phone || '').trim();
     const companyName = String(req.body.companyName || '').trim() || null;
+    const storeCity = String(req.body.storeCity || '').trim() || null;
+    const storeNeighborhood = String(req.body.storeNeighborhood || '').trim() || null;
 
     if (!name || !email || !phone) {
       return res.status(400).json({ message: 'Nome, e-mail e telefone são obrigatórios.' });
     }
 
-    const existingUser = await prisma.user.findFirst({
-      where: { email, id: { not: req.user.id } },
-      select: { id: true }
+    const duplicate = await prisma.user.findFirst({
+      where: { email, NOT: { id: req.user.id } },
+      select: { id: true },
     });
-    if (existingUser) return res.status(409).json({ message: 'Este e-mail já está em uso.' });
+    if (duplicate) {
+      return res.status(409).json({ message: 'Esse e-mail já está em uso por outra conta.' });
+    }
 
-    const updatedUser = await prisma.user.update({
+    const user = await prisma.user.update({
       where: { id: req.user.id },
-      data: { name, email, phone, companyName },
+      data: { name, email, phone, companyName, storeCity, storeNeighborhood },
     });
-
-    const favoriteCount = await prisma.favorite.count({ where: { userId: req.user.id } });
-    const listingCount = await prisma.listing.count({ where: { userId: req.user.id } });
-    const activeSubscription = await ensureDefaultPlanSubscription(req.user.id, updatedUser.email);
 
     return res.json({
-      id: updatedUser.id,
-      name: updatedUser.name,
-      email: updatedUser.email,
-      phone: updatedUser.phone,
-      role: updatedUser.role,
-      companyName: updatedUser.companyName,
-      subscription: activeSubscription,
-      metrics: updatedUser.role === 'ADMIN' ? { favoriteCount, listingCount } : { favoriteCount }
+      message: 'Minhas informações atualizadas com sucesso.',
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+        companyName: user.companyName,
+        storeCity: user.storeCity,
+        storeNeighborhood: user.storeNeighborhood,
+      },
     });
   } catch (error) {
-    return res.status(500).json({ message: 'Não foi possível atualizar seus dados.' });
+    return res.status(500).json({ message: 'Não foi possível atualizar suas informações.' });
   }
 });
 
@@ -234,6 +229,8 @@ router.get('/me', authRequired, async (req, res) => {
     phone: req.user.phone,
     role: req.user.role,
     companyName: req.user.companyName,
+    storeCity: req.user.storeCity,
+    storeNeighborhood: req.user.storeNeighborhood,
     subscription: activeSubscription,
     metrics: req.user.role === 'ADMIN' ? { favoriteCount, listingCount } : { favoriteCount }
   });

@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 
 const API_URL = (import.meta.env.VITE_API_URL || 'http://127.0.0.1:4000/api').replace(/\/$/, '');
-const MARKETPLACE_NAME = import.meta.env.VITE_MARKETPLACE_NAME || 'Local Marktplace';
-const MARKETPLACE_CITY = import.meta.env.VITE_MARKETPLACE_CITY || 'sua cidade';
-const MARKETPLACE_TAGLINE = import.meta.env.VITE_MARKETPLACE_TAGLINE || 'Compre e anuncie veículos com uma experiência local mais direta e comercial.';
+const MARKETPLACE_NAME = import.meta.env.VITE_MARKETPLACE_NAME || 'Local Marketplace';
+const MARKETPLACE_CITY = import.meta.env.VITE_MARKETPLACE_CITY || 'Curitiba e região';
+const MARKETPLACE_TAGLINE = import.meta.env.VITE_MARKETPLACE_TAGLINE || 'Compre e anuncie veículos em Curitiba e região metropolitana com uma experiência mais local, profissional e comercial.';
 const emptyAuth = { token: '', user: null };
 const VEHICLE_DATA = {
   Chevrolet: ['Agile', 'Astra', 'Blazer', 'Bolt', 'Camaro', 'Celta', 'Classic', 'Cobalt', 'Corsa', 'Cruze', 'Equinox', 'Joy', 'Kadett', 'Meriva', 'Montana', 'Onix', 'Onix Plus', 'Omega', 'Prisma', 'S10', 'Silverado', 'Sonic', 'Spin', 'Tracker', 'Trailblazer', 'Vectra', 'Zafira'],
@@ -36,6 +36,10 @@ const SORT_OPTIONS = [
   { value: 'year_desc', label: 'Ano mais novo' },
   { value: 'km_asc', label: 'Menor KM' },
 ];
+
+const REGION_CITIES = ['Curitiba', 'São José dos Pinhais', 'Colombo', 'Pinhais', 'Araucária', 'Campo Largo', 'Almirante Tamandaré', 'Fazenda Rio Grande', 'Quatro Barras', 'Campina Grande do Sul'];
+const REGION_HIGHLIGHTS = ['Atendimento rápido por WhatsApp', 'Busca por cidade e bairro', 'Vitrine para lojas da região', 'Leads direto no painel'];
+const PROFILE_INITIAL = { name: '', email: '', phone: '', companyName: '', storeCity: '', storeNeighborhood: '' };
 
 const listingInitial = {
   title: '', description: '', price: '', brand: '', model: '', year: '', km: '',
@@ -139,13 +143,21 @@ function formatDate(dateValue) {
   return new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(date);
 }
 
+function calculateProfileCompletion(profile = {}) {
+  const fields = ['name', 'email', 'phone', 'companyName', 'storeCity', 'storeNeighborhood'];
+  const filled = fields.filter((key) => String(profile?.[key] || '').trim()).length;
+  return Math.round((filled / fields.length) * 100);
+}
+
+function getListingBadge(listing = {}) {
+  if (listing?.seller?.type === 'LOJA') return 'Loja da região';
+  if (listing?.isFeatured) return 'Destaque ativo';
+  return 'Particular';
+}
+
 const storeProfileInitial = {
   storeName: '', storeLogoUrl: '', storeBannerUrl: '', storeDescription: '',
   storeCity: '', storeNeighborhood: '', storeWhatsapp: '', storeInstagram: '', storeWebsite: '', storeIsActive: true
-};
-
-const accountProfileInitial = {
-  name: '', email: '', phone: '', companyName: ''
 };
 
 async function api(path, options = {}, token = '') {
@@ -251,49 +263,64 @@ function Header({ auth, onLogout, currentView, setCurrentView }) {
   );
 }
 
-function Hero({ listingsCount, onOpenAuth, setCurrentView }) {
+function Hero({ listingsCount, onOpenAuth, setCurrentView, setFilters }) {
+  const openRegionalSearch = (city = '') => {
+    if (setFilters) setFilters((prev) => ({ ...prev, city, neighborhood: '', page: 1 }));
+    setCurrentView('home');
+  };
+
   return (
-    <section className="hero card">
-      <div>
-        <span className="eyebrow">Classificados automotivos de {MARKETPLACE_CITY}</span>
-        <h2>Compre e anuncie diretamente em {MARKETPLACE_CITY}.</h2>
+    <section className="hero card hero-upgrade">
+      <div className="hero-copy">
+        <span className="eyebrow">Marketplace automotivo regional</span>
+        <h2>Venda melhor em Curitiba e região metropolitana.</h2>
         <p>
-          Busca avançada, fotos otimizadas automaticamente, moderação de anúncios e contato direto por WhatsApp para fechar negócio com mais confiança.
+          Seu sistema agora pode se posicionar como uma vitrine local: busca por cidade e bairro, loja pública, leads no painel e contato direto por WhatsApp para acelerar fechamento.
         </p>
+        <div className="chip-row wider">
+          {REGION_HIGHLIGHTS.map((item) => <span key={item}>{item}</span>)}
+        </div>
         <div className="actions-row wrap">
           <button onClick={() => setCurrentView('dashboard')}>Publicar anúncio</button>
           <button className="ghost" onClick={onOpenAuth}>Entrar para anunciar</button>
           <button className="ghost" onClick={() => setCurrentView('planos')}>Ver planos comerciais</button>
         </div>
+        <div className="city-chip-grid">
+          {REGION_CITIES.slice(0, 6).map((city) => (
+            <button key={city} type="button" className="city-chip" onClick={() => openRegionalSearch(city)}>{city}</button>
+          ))}
+        </div>
       </div>
-      <div className="hero-stats">
-        <div><strong>{listingsCount}</strong><span>Anúncios aprovados</span></div>
-        <div><strong>15</strong><span>Fotos por anúncio</span></div>
-        <div><strong>1 clique</strong><span>Contato por WhatsApp</span></div>
+      <div className="hero-aside">
+        <div className="hero-stats">
+          <div><strong>{listingsCount}</strong><span>Anúncios aprovados</span></div>
+          <div><strong>{storesLabelPlaceholder(listingsCount)}</strong><span>Pronto para operação regional</span></div>
+          <div><strong>1 clique</strong><span>Contato por WhatsApp</span></div>
+          <div><strong>RMC</strong><span>Curitiba e cidades vizinhas</span></div>
+        </div>
+        <div className="card hero-proof">
+          <strong>O que faz vender mais</strong>
+          <ul>
+            <li>Localização visível nos cards</li>
+            <li>Loja com perfil profissional</li>
+            <li>Captação simples no WhatsApp</li>
+            <li>Painel com leads e favoritos</li>
+          </ul>
+        </div>
       </div>
     </section>
   );
 }
 
+function storesLabelPlaceholder() {
+  return '+local';
+}
+
 function AuthPanel({ onAuthSuccess }) {
   const [mode, setMode] = useState('login');
-  const [form, setForm] = useState({ name: '', email: '', phone: '', password: '', confirmPassword: '', resetPassword: '', resetPasswordConfirm: '', code: '' });
+  const [form, setForm] = useState({ name: '', email: '', phone: '', password: '', passwordConfirm: '', resetPassword: '', resetPasswordConfirm: '', code: '' });
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
-
-  const authModeMeta = {
-    login: { title: 'Entre na sua conta', subtitle: 'Acesse seu painel, publique anúncios e responda clientes da sua região.' },
-    register: { title: 'Crie sua conta', subtitle: 'Cadastre-se com aparência mais profissional e comece a vender com mais confiança.' },
-    forgot: { title: 'Recuperar acesso', subtitle: 'Informe seu e-mail para receber um código de recuperação.' },
-    reset: { title: 'Definir nova senha', subtitle: 'Digite o código recebido e crie uma nova senha para continuar.' },
-  };
-
-  const updateField = (key, value) => setForm((prev) => ({ ...prev, [key]: value }));
-
-  const switchMode = (nextMode) => {
-    setMode(nextMode);
-    setMessage('');
-  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -301,21 +328,20 @@ function AuthPanel({ onAuthSuccess }) {
     setMessage('');
     try {
       if (mode === 'register') {
-        if (form.password.length < 6) throw new Error('Use uma senha com pelo menos 6 caracteres.');
-        if (form.password !== form.confirmPassword) throw new Error('As senhas não conferem.');
-        await api('/auth/register', { method: 'POST', body: JSON.stringify({ name: form.name, email: form.email, phone: form.phone, password: form.password }) });
-        switchMode('login');
+        if (form.password !== form.passwordConfirm) throw new Error('As senhas não conferem.');
+        if (String(form.password).length < 6) throw new Error('A senha deve ter pelo menos 6 caracteres.');
+        await api('/auth/register', { method: 'POST', body: JSON.stringify(form) });
+        setMode('login');
         setMessage('Cadastro concluído. Agora faça o login.');
       } else if (mode === 'forgot') {
         const data = await api('/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email: form.email }) });
         setMode('reset');
         setMessage(data.message || 'Se o e-mail existir, enviamos um código de recuperação.');
       } else if (mode === 'reset') {
-        if (form.resetPassword.length < 6) throw new Error('Use uma senha com pelo menos 6 caracteres.');
         if (form.resetPassword !== form.resetPasswordConfirm) throw new Error('As senhas não conferem.');
         const data = await api('/auth/reset-password', { method: 'POST', body: JSON.stringify({ email: form.email, code: form.code, password: form.resetPassword }) });
-        switchMode('login');
-        setForm((prev) => ({ ...prev, password: '', confirmPassword: '', resetPassword: '', resetPasswordConfirm: '', code: '' }));
+        setMode('login');
+        setForm({ ...form, password: '', resetPassword: '', resetPasswordConfirm: '', code: '' });
         setMessage(data.message || 'Senha atualizada com sucesso. Faça o login.');
       } else {
         const data = await api('/auth/login', { method: 'POST', body: JSON.stringify({ email: form.email, password: form.password }) });
@@ -328,76 +354,26 @@ function AuthPanel({ onAuthSuccess }) {
     }
   };
 
-  const meta = authModeMeta[mode] || authModeMeta.login;
-
   return (
-    <section className="auth-shell">
-      <div className="auth-showcase card">
-        <span className="eyebrow">Acesso profissional</span>
-        <h2>{MARKETPLACE_NAME}</h2>
-        <p>{MARKETPLACE_TAGLINE}</p>
-        <div className="auth-benefits">
-          <div><strong>Mais confiança</strong><span>Login e cadastro com visual mais profissional para o cliente levar seu negócio a sério.</span></div>
-          <div><strong>Mais conversão</strong><span>Anuncie, receba contatos no WhatsApp e mantenha sua apresentação mais organizada.</span></div>
-          <div><strong>Mais controle</strong><span>Edite seus dados pessoais, empresa, loja e senha no mesmo painel.</span></div>
-        </div>
+    <section className="card auth-card auth-card-pro">
+      <div className="auth-header"><div><span className="eyebrow">Acesso profissional</span><h2>Entre para anunciar com aparência de produto pronto para vender.</h2><p>Cadastro rápido, recuperação de senha e acesso ao painel comercial.</p></div><div className="chip-row wider"><span>Login profissional</span><span>Recuperação de senha</span><span>Painel com edição de conta</span></div></div><div className="tabs">
+        <button className={mode === 'login' ? 'active' : ''} onClick={() => setMode('login')}>Login</button>
+        <button className={mode === 'register' ? 'active' : ''} onClick={() => setMode('register')}>Cadastro</button>
+        <button className={mode === 'forgot' ? 'active' : ''} onClick={() => setMode('forgot')}>Recuperar senha</button>
       </div>
-
-      <section className="card auth-card auth-card-pro">
-        <div className="auth-card-header">
-          <span className="eyebrow">Conta</span>
-          <h2>{meta.title}</h2>
-          <p>{meta.subtitle}</p>
-        </div>
-
-        <div className="tabs auth-tabs">
-          <button type="button" className={mode === 'login' ? 'active' : ''} onClick={() => switchMode('login')}>Entrar</button>
-          <button type="button" className={mode === 'register' ? 'active' : ''} onClick={() => switchMode('register')}>Criar conta</button>
-          <button type="button" className={mode === 'forgot' || mode === 'reset' ? 'active' : ''} onClick={() => switchMode('forgot')}>Recuperar</button>
-        </div>
-
-        <form onSubmit={handleSubmit} className="grid-form">
-          {mode === 'register' && (
-            <div className="grid two">
-              <label className="field-group"><span>Nome completo</span><input placeholder="Seu nome" value={form.name} onChange={(e) => updateField('name', e.target.value)} /></label>
-              <label className="field-group"><span>WhatsApp</span><input placeholder="(00) 00000-0000" value={form.phone} onChange={(e) => updateField('phone', e.target.value)} /></label>
-            </div>
-          )}
-
-          {(mode === 'login' || mode === 'register' || mode === 'forgot' || mode === 'reset') && (
-            <label className="field-group"><span>E-mail</span><input placeholder="voce@exemplo.com" type="email" value={form.email} onChange={(e) => updateField('email', e.target.value)} /></label>
-          )}
-
-          {mode === 'login' && <label className="field-group"><span>Senha</span><input placeholder="Digite sua senha" type="password" value={form.password} onChange={(e) => updateField('password', e.target.value)} /></label>}
-
-          {mode === 'register' && (
-            <div className="grid two">
-              <label className="field-group"><span>Senha</span><input placeholder="Mínimo 6 caracteres" type="password" value={form.password} onChange={(e) => updateField('password', e.target.value)} /></label>
-              <label className="field-group"><span>Confirmar senha</span><input placeholder="Repita a senha" type="password" value={form.confirmPassword} onChange={(e) => updateField('confirmPassword', e.target.value)} /></label>
-            </div>
-          )}
-
-          {mode === 'reset' && (
-            <>
-              <label className="field-group"><span>Código de recuperação</span><input placeholder="Código recebido por e-mail" value={form.code} onChange={(e) => updateField('code', e.target.value)} /></label>
-              <div className="grid two">
-                <label className="field-group"><span>Nova senha</span><input placeholder="Mínimo 6 caracteres" type="password" value={form.resetPassword} onChange={(e) => updateField('resetPassword', e.target.value)} /></label>
-                <label className="field-group"><span>Confirmar nova senha</span><input placeholder="Repita a nova senha" type="password" value={form.resetPasswordConfirm} onChange={(e) => updateField('resetPasswordConfirm', e.target.value)} /></label>
-              </div>
-            </>
-          )}
-
-          <button type="submit" disabled={loading}>{loading ? 'Processando...' : mode === 'login' ? 'Entrar agora' : mode === 'register' ? 'Criar minha conta' : mode === 'forgot' ? 'Enviar código' : 'Salvar nova senha'}</button>
-        </form>
-
-        <div className="auth-footer-actions">
-          {mode === 'login' && <button type="button" className="link-button" onClick={() => switchMode('forgot')}>Esqueci minha senha</button>}
-          {mode === 'forgot' && <button type="button" className="link-button" onClick={() => switchMode('login')}>Voltar para login</button>}
-          {mode === 'reset' && <button type="button" className="link-button" onClick={() => switchMode('forgot')}>Solicitar outro código</button>}
-        </div>
-
-        {message && <p className="message">{message}</p>}
-      </section>
+      <form onSubmit={handleSubmit} className="grid-form">
+        {mode === 'register' && <input placeholder="Nome completo" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />}
+        {mode === 'register' && <input placeholder="Telefone / WhatsApp" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />}
+        {(mode === 'login' || mode === 'register' || mode === 'forgot') && <input placeholder="E-mail" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />}
+        {(mode === 'login' || mode === 'register') && <input placeholder="Senha" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />}
+        {mode === 'register' && <input placeholder="Confirmar senha" type="password" value={form.passwordConfirm} onChange={(e) => setForm({ ...form, passwordConfirm: e.target.value })} />}
+        {mode === 'reset' && <input placeholder="Código recebido por e-mail" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} />}
+        {mode === 'reset' && <input placeholder="Nova senha" type="password" value={form.resetPassword} onChange={(e) => setForm({ ...form, resetPassword: e.target.value })} />}
+        {mode === 'reset' && <input placeholder="Confirmar nova senha" type="password" value={form.resetPasswordConfirm} onChange={(e) => setForm({ ...form, resetPasswordConfirm: e.target.value })} />}
+        <button type="submit" disabled={loading}>{loading ? 'Aguarde...' : mode === 'login' ? 'Entrar' : mode === 'register' ? 'Cadastrar' : mode === 'forgot' ? 'Enviar código' : 'Redefinir senha'}</button>
+      </form>
+      {mode === 'login' && <button className="link-button" onClick={() => setMode('forgot')}>Esqueci minha senha</button>}
+      {message && <p className="message">{message}</p>}
     </section>
   );
 }
@@ -474,7 +450,7 @@ function ListingCard({ listing, auth, onOpen, onToggleFavorite }) {
           <h3>{listing.title}</h3>
           <p>{listing.brand} {listing.model} • {listing.year} • {listing.km} km</p>
           <p>{listing.city} / {listing.neighborhood}</p>
-          <p className="subtle">{listing.seller?.name || listing.user?.storeName || listing.user?.companyName || listing.user?.name || 'Vendedor'} • {sellerLabel}</p>
+          <p className="subtle">{listing.seller?.name || listing.user?.storeName || listing.user?.companyName || listing.user?.name || 'Vendedor'} • {sellerLabel}</p><div className="chip-row"><span>{listing.city}{listing.neighborhood ? ` / ${listing.neighborhood}` : ''}</span><span>{getListingBadge(listing)}</span></div>
         </div>
         <strong>{currency(listing.price)}</strong>
         <div className="chip-row">
@@ -841,7 +817,39 @@ function ListingForm({ auth, editing, onSaved, onCancel }) {
   );
 }
 
-function Dashboard({ auth, listings, favorites, leads, subscription, plans, payments, checkoutState, paymentConfig, myStore, onSaveStore, onSaveAccount, onRefresh, onEdit, onOpen, onDelete, onToggleFavorite, onLeadStatusChange, onSubscribe, onFeatureListing, onRefreshPayment, onOpenPlans, onOpenStore, onChangePassword }) {
+
+function AccountProfileCard({ profile, onChange, onSubmit, saving = false }) {
+  const completion = calculateProfileCompletion(profile);
+  return (
+    <section className="card">
+      <div className="section-title">
+        <div>
+          <h2>Minhas informações</h2>
+          <p>Atualize seus dados principais para transmitir mais confiança ao cliente e profissionalizar a operação.</p>
+        </div>
+        <div className="profile-completion">
+          <strong>{completion}%</strong>
+          <span>perfil completo</span>
+        </div>
+      </div>
+      <div className="progress-track"><div className="progress-bar" style={{ width: `${completion}%` }} /></div>
+      <div className="grid three">
+        <label className="field-group"><span>Nome</span><input value={profile.name} onChange={(e) => onChange('name', e.target.value)} /></label>
+        <label className="field-group"><span>E-mail</span><input type="email" value={profile.email} onChange={(e) => onChange('email', e.target.value)} /></label>
+        <label className="field-group"><span>Telefone / WhatsApp</span><input value={profile.phone} onChange={(e) => onChange('phone', e.target.value)} /></label>
+        <label className="field-group"><span>Empresa / loja</span><input value={profile.companyName} onChange={(e) => onChange('companyName', e.target.value)} /></label>
+        <label className="field-group"><span>Cidade base</span><input value={profile.storeCity} onChange={(e) => onChange('storeCity', e.target.value)} /></label>
+        <label className="field-group"><span>Bairro base</span><input value={profile.storeNeighborhood} onChange={(e) => onChange('storeNeighborhood', e.target.value)} /></label>
+      </div>
+      <div className="actions-row wrap">
+        <button onClick={onSubmit} disabled={saving}>{saving ? 'Salvando...' : 'Salvar minhas informações'}</button>
+        <span className="subtle">Esses dados ajudam a deixar o perfil mais completo e confiável.</span>
+      </div>
+    </section>
+  );
+}
+
+function Dashboard({ auth, listings, favorites, leads, subscription, plans, payments, checkoutState, paymentConfig, myStore, onSaveStore, onRefresh, onEdit, onOpen, onDelete, onToggleFavorite, onLeadStatusChange, onSubscribe, onFeatureListing, onRefreshPayment, onOpenPlans, onOpenStore, onChangePassword, profileForm, onProfileChange, onSaveProfile, savingProfile }) {
   const upgradePlans = getUpgradePlans(plans, subscription);
   const isParticular = getCurrentPlanSlug(subscription) === 'particular' || !subscription;
   const canManageStore = ['lojista', 'premium'].includes(getCurrentPlanSlug(subscription));
@@ -877,6 +885,7 @@ function Dashboard({ auth, listings, favorites, leads, subscription, plans, paym
           <small>Contatos diretos para o anunciante</small>
         </section>
       </div>
+      <AccountProfileCard profile={profileForm} onChange={onProfileChange} onSubmit={onSaveProfile} saving={savingProfile} />
       <section className="card">
         <div className="section-title">
           <div>
@@ -953,6 +962,12 @@ function Dashboard({ auth, listings, favorites, leads, subscription, plans, paym
                 <a className="button-link success" href={buildWhatsAppUrl(lead.phone || lead.listing?.phone, lead.listing?.title || '')} target="_blank" rel="noreferrer">Chamar no WhatsApp</a>
               </div>
               <p>{lead.message}</p>
+              <div className="actions-row wrap">
+                <span className="status-pill approved">{lead.status || 'NEW'}</span>
+                <button className="ghost" onClick={() => onLeadStatusChange(lead.id, 'CONTACTED')}>Marcar contato</button>
+                <button className="ghost" onClick={() => onLeadStatusChange(lead.id, 'NEGOTIATING')}>Negociando</button>
+                <button className="ghost" onClick={() => onLeadStatusChange(lead.id, 'CLOSED')}>Fechado</button>
+              </div>
             </article>
           )) : <p className="subtle">Quando alguém enviar interesse, você verá os contatos aqui para seguir pelo WhatsApp.</p>}
         </div>
@@ -1002,16 +1017,6 @@ function Dashboard({ auth, listings, favorites, leads, subscription, plans, paym
       <section className="card">
         <div className="section-title">
           <div>
-            <h2>Minhas informações</h2>
-            <p>Edite seus dados pessoais para deixar sua conta mais profissional e atualizada.</p>
-          </div>
-        </div>
-        <AccountProfileCard auth={auth} onSubmit={onSaveAccount} />
-      </section>
-
-      <section className="card">
-        <div className="section-title">
-          <div>
             <h2>Segurança da conta</h2>
             <p>Altere sua senha sempre que precisar, com validação da senha atual.</p>
           </div>
@@ -1044,54 +1049,6 @@ function Dashboard({ auth, listings, favorites, leads, subscription, plans, paym
         </div>
       </section>
     </div>
-  );
-}
-
-
-function AccountProfileCard({ auth, onSubmit }) {
-  const [form, setForm] = useState(accountProfileInitial);
-  const [message, setMessage] = useState('');
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    setForm({
-      name: auth.user?.name || '',
-      email: auth.user?.email || '',
-      phone: auth.user?.phone || '',
-      companyName: auth.user?.companyName || '',
-    });
-  }, [auth.user]);
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setSaving(true);
-    setMessage('');
-    try {
-      const response = await onSubmit(form);
-      setMessage(response?.message || 'Suas informações foram atualizadas com sucesso.');
-    } catch (error) {
-      setMessage(error.message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <form className="profile-form" onSubmit={handleSubmit}>
-      <div className="grid two">
-        <label className="field-group"><span>Nome</span><input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
-        <label className="field-group"><span>Telefone / WhatsApp</span><input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></label>
-      </div>
-      <div className="grid two">
-        <label className="field-group"><span>E-mail</span><input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></label>
-        <label className="field-group"><span>Empresa / loja (opcional)</span><input value={form.companyName} onChange={(e) => setForm({ ...form, companyName: e.target.value })} /></label>
-      </div>
-      <div className="actions-row wrap profile-form-actions">
-        <button type="submit" disabled={saving}>{saving ? 'Salvando...' : 'Salvar minhas informações'}</button>
-        <span className="subtle">Esses dados serão usados no seu painel e no contato com compradores.</span>
-      </div>
-      {message && <p className="message">{message}</p>}
-    </form>
   );
 }
 
@@ -1424,6 +1381,8 @@ export default function App() {
   const [editingListing, setEditingListing] = useState(null);
   const [message, setMessage] = useState('');
   const [adminData, setAdminData] = useState({ dashboard: { users: 0, listings: 0, pending: 0, leads: 0, featured: 0, activeSubscriptions: 0 }, listings: [], leads: [], subscriptions: [], payments: [], plans: [], users: [] });
+  const [profileForm, setProfileForm] = useState(PROFILE_INITIAL);
+  const [savingProfile, setSavingProfile] = useState(false);
 
   useEffect(() => {
     localStorage.setItem('automarket-auth', JSON.stringify(auth));
@@ -1452,6 +1411,24 @@ export default function App() {
     try {
       const mine = await api('/listings/mine', {}, auth.token);
       setMyListings(mine);
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+
+  const fetchProfile = async () => {
+    if (!auth.user) return setProfileForm(PROFILE_INITIAL);
+    try {
+      const data = await api('/auth/me', {}, auth.token);
+      setProfileForm({
+        name: data.name || '',
+        email: data.email || '',
+        phone: data.phone || '',
+        companyName: data.companyName || '',
+        storeCity: data.storeCity || '',
+        storeNeighborhood: data.storeNeighborhood || '',
+      });
     } catch (error) {
       setMessage(error.message);
     }
@@ -1539,24 +1516,6 @@ export default function App() {
     }
   };
 
-  const refreshCurrentUser = async () => {
-    if (!auth.token) return null;
-    const currentUser = await api('/auth/me', {}, auth.token);
-    setAuth((prev) => ({
-      ...prev,
-      user: {
-        ...prev.user,
-        id: currentUser.id,
-        name: currentUser.name,
-        email: currentUser.email,
-        phone: currentUser.phone,
-        role: currentUser.role,
-        companyName: currentUser.companyName || '',
-      }
-    }));
-    return currentUser;
-  };
-
   const refreshPrivateData = async () => {
     if (!auth.user) return;
     await Promise.all([
@@ -1565,6 +1524,7 @@ export default function App() {
       fetchSellerLeads(),
       fetchSubscription(),
       fetchMyStore(),
+      fetchProfile(),
       auth.user.role === 'ADMIN' ? fetchAdmin() : Promise.resolve(),
     ]);
   };
@@ -1601,6 +1561,7 @@ export default function App() {
       setPayments([]);
       setMyStore({ canManageStore: false, planSlug: 'particular', planName: 'Particular', profile: storeProfileInitial });
       setAdminData({ dashboard: { users: 0, listings: 0, pending: 0, leads: 0, featured: 0, activeSubscriptions: 0 }, listings: [], leads: [], subscriptions: [], payments: [], plans: [], users: [] });
+      setProfileForm(PROFILE_INITIAL);
     }
   }, [auth.user, auth.token]);
 
@@ -1649,28 +1610,10 @@ export default function App() {
     };
   }, [checkoutState?.paymentId, auth.token]);
 
-  const handleAuthSuccess = async (data) => {
+  const handleAuthSuccess = (data) => {
     setAuth(data);
     setCurrentView(data.user?.role === 'ADMIN' ? 'admin' : 'dashboard');
     setMessage('');
-    try {
-      await api('/auth/me', {}, data.token).then((currentUser) => {
-        setAuth((prev) => ({
-          ...prev,
-          user: {
-            ...prev.user,
-            id: currentUser.id,
-            name: currentUser.name,
-            email: currentUser.email,
-            phone: currentUser.phone,
-            role: currentUser.role,
-            companyName: currentUser.companyName || '',
-          }
-        }));
-      });
-    } catch (error) {
-      setMessage(error.message);
-    }
   };
 
   const logout = () => {
@@ -1814,27 +1757,18 @@ export default function App() {
     }
   };
 
-  const saveMyAccount = async (payload) => {
+
+  const saveProfile = async () => {
     try {
-      const updated = await api('/auth/me', { method: 'PUT', body: JSON.stringify(payload) }, auth.token);
-      setAuth((prev) => ({
-        ...prev,
-        user: {
-          ...prev.user,
-          id: updated.id,
-          name: updated.name,
-          email: updated.email,
-          phone: updated.phone,
-          role: updated.role,
-          companyName: updated.companyName || '',
-        }
-      }));
-      setMessage('Seus dados foram atualizados com sucesso.');
-      await Promise.all([fetchListings(), fetchMyListings(), fetchStores(), fetchMyStore(), fetchSubscription()]);
-      return { message: 'Seus dados foram atualizados com sucesso.' };
+      setSavingProfile(true);
+      const data = await api('/auth/me', { method: 'PUT', body: JSON.stringify(profileForm) }, auth.token);
+      setAuth((prev) => ({ ...prev, user: { ...prev.user, ...(data.user || {}) } }));
+      setProfileForm((prev) => ({ ...prev, ...(data.user || {}) }));
+      setMessage(data.message || 'Minhas informações atualizadas com sucesso.');
     } catch (error) {
       setMessage(error.message);
-      throw error;
+    } finally {
+      setSavingProfile(false);
     }
   };
 
@@ -1884,7 +1818,7 @@ export default function App() {
       <main className="container">
         {currentView === 'home' && (
           <>
-            <Hero listingsCount={listingMeta.total || listings.length} onOpenAuth={() => setCurrentView(auth.user ? 'dashboard' : 'auth')} setCurrentView={setCurrentView} />
+            <Hero listingsCount={listingMeta.total || listings.length} onOpenAuth={() => setCurrentView(auth.user ? 'dashboard' : 'auth')} setCurrentView={setCurrentView} setFilters={setFilters} />
             <Filters filters={filters} setFilters={setFilters} onRefresh={fetchListings} total={listingMeta.total || listings.length} meta={listingMeta} />
             <ListingGrid listings={listings} auth={auth} onOpen={openListing} onToggleFavorite={toggleFavorite} />
             <PaginationBar meta={listingMeta} onChange={(page) => setFilters((prev) => ({ ...prev, page }))} />
@@ -1908,7 +1842,6 @@ export default function App() {
               paymentConfig={paymentConfig}
               myStore={myStore}
               onSaveStore={saveMyStore}
-              onSaveAccount={saveMyAccount}
               onRefresh={refreshAll}
               onEdit={(listing) => setEditingListing(listing)}
               onOpen={openListing}
@@ -1921,6 +1854,10 @@ export default function App() {
               onOpenPlans={() => setCurrentView('planos')}
               onOpenStore={() => openStore(auth.user.id)}
               onChangePassword={handleChangePassword}
+              profileForm={profileForm}
+              onProfileChange={(key, value) => setProfileForm((prev) => ({ ...prev, [key]: value }))}
+              onSaveProfile={saveProfile}
+              savingProfile={savingProfile}
             />
           </>
         )}
