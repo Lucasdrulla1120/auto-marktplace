@@ -109,37 +109,6 @@ function formatPaymentStatus(status = '') {
   return labels[status] || status || 'Pendente';
 }
 
-function formatListingStatus(status = '') {
-  const labels = {
-    PENDING: 'Em análise',
-    APPROVED: 'Publicado',
-    REJECTED: 'Reprovado',
-    EXPIRED: 'Expirado',
-  };
-  return labels[status] || status || 'Rascunho';
-}
-
-function getDaysRemaining(dateValue) {
-  if (!dateValue) return null;
-  const diff = new Date(dateValue).getTime() - Date.now();
-  return Math.ceil(diff / (1000 * 60 * 60 * 24));
-}
-
-function getListingExpirationLabel(listing = {}) {
-  if (!listing?.expiresAt) return 'Sem validade definida';
-  const days = getDaysRemaining(listing.expiresAt);
-  if (days === null) return 'Sem validade definida';
-  if (days < 0) return 'Anúncio expirado';
-  if (days === 0) return 'Expira hoje';
-  if (days === 1) return 'Expira amanhã';
-  if (days <= 7) return `Expira em ${days} dias`;
-  return `Validade até ${formatDate(listing.expiresAt)}`;
-}
-
-function isTrustedSeller(listing = {}) {
-  return Boolean(listing?.seller?.storeIsActive || listing?.seller?.listingCount >= 3);
-}
-
 function planBenefits(plan) {
   return String(plan?.benefits || '')
     .split('|')
@@ -181,9 +150,8 @@ function calculateProfileCompletion(profile = {}) {
 }
 
 function getListingBadge(listing = {}) {
-  if (listing?.isFeatured) return 'Destaque premium';
   if (listing?.seller?.type === 'LOJA') return 'Loja da região';
-  if (isTrustedSeller(listing)) return 'Anunciante confiável';
+  if (listing?.isFeatured) return 'Destaque ativo';
   return 'Particular';
 }
 
@@ -324,15 +292,6 @@ function Hero({ listingsCount, onOpenAuth, setCurrentView, setFilters }) {
         </div>
       </div>
       <div className="hero-aside">
-        <div className="premium-highlight card">
-          <span className="eyebrow">Versão premium</span>
-          <strong>Mais pronta para vender para lojistas</strong>
-          <ul>
-            <li>vitrine com confiança e validade</li>
-            <li>lojas premium com cara comercial</li>
-            <li>painel com gestão de leads e expiração</li>
-          </ul>
-        </div>
         <div className="hero-stats">
           <div><strong>{listingsCount}</strong><span>Anúncios aprovados</span></div>
           <div><strong>{storesLabelPlaceholder(listingsCount)}</strong><span>Pronto para operação regional</span></div>
@@ -477,18 +436,13 @@ function ListingCard({ listing, auth, onOpen, onToggleFavorite }) {
   const primary = getPrimaryImage(listing.images);
   const whatsappUrl = buildWhatsAppUrl(listing.phone, listing.title, listing.city);
   const sellerLabel = listing.seller?.type === 'LOJA' ? 'Loja ativa' : listing.seller?.type === 'REVENDA' ? 'Revenda' : 'Particular';
-  const trustedSeller = isTrustedSeller(listing);
-  const daysRemaining = getDaysRemaining(listing.expiresAt);
-  const expiresSoon = typeof daysRemaining === 'number' && daysRemaining <= 7;
-
   return (
-    <article className={`listing-card card ${listing.isFeatured ? 'premium-card' : ''}`}>
+    <article className="listing-card card">
       <div className="thumb-wrap">
         <img src={primary?.imageUrl || 'https://via.placeholder.com/800x500?text=Sem+imagem'} alt={listing.title} className="thumb" />
         <div className="pill-stack">
-          <span className={`status-pill ${(listing.status || 'APPROVED').toLowerCase()}`}>{formatListingStatus(listing.status)}</span>
-          {listing.isFeatured && <span className="status-pill featured">DESTAQUE PREMIUM</span>}
-          {trustedSeller && <span className="status-pill verified">VERIFICADO</span>}
+          <span className={`status-pill ${(listing.status || 'APPROVED').toLowerCase()}`}>{listing.status}</span>
+          {listing.isFeatured && <span className="status-pill featured">DESTAQUE</span>}
         </div>
       </div>
       <div className="listing-body">
@@ -496,23 +450,14 @@ function ListingCard({ listing, auth, onOpen, onToggleFavorite }) {
           <h3>{listing.title}</h3>
           <p>{listing.brand} {listing.model} • {listing.year} • {listing.km} km</p>
           <p>{listing.city} / {listing.neighborhood}</p>
-          <p className="subtle">{listing.seller?.name || listing.user?.storeName || listing.user?.companyName || listing.user?.name || 'Vendedor'} • {sellerLabel}</p>
-          <div className="chip-row wider">
-            <span>{listing.city}{listing.neighborhood ? ` / ${listing.neighborhood}` : ''}</span>
-            <span>{getListingBadge(listing)}</span>
-            {trustedSeller && <span>Perfil com confiança</span>}
-          </div>
+          <p className="subtle">{listing.seller?.name || listing.user?.storeName || listing.user?.companyName || listing.user?.name || 'Vendedor'} • {sellerLabel}</p><div className="chip-row"><span>{listing.city}{listing.neighborhood ? ` / ${listing.neighborhood}` : ''}</span><span>{getListingBadge(listing)}</span></div>
         </div>
         <strong>{currency(listing.price)}</strong>
-        <div className="chip-row wider">
+        <div className="chip-row">
           <span>{listing.fuel || 'Combustível não informado'}</span>
           <span>{listing.transmission || 'Câmbio não informado'}</span>
           <span>{listing.color || 'Cor não informada'}</span>
           {!!listing.favoriteCount && <span>{listing.favoriteCount} favorito(s)</span>}
-        </div>
-        <div className={`listing-expiration ${expiresSoon ? 'warning' : ''}`}>
-          <strong>{getListingExpirationLabel(listing)}</strong>
-          <span>{listing.isFeatured ? `Destaque até ${formatDate(listing.featuredUntil)}` : 'Sem destaque ativo'}</span>
         </div>
         <div className="actions-row wrap">
           <button onClick={() => onOpen(listing)}>Ver detalhes</button>
@@ -904,7 +849,7 @@ function AccountProfileCard({ profile, onChange, onSubmit, saving = false }) {
   );
 }
 
-function Dashboard({ auth, listings, favorites, leads, subscription, plans, payments, checkoutState, paymentConfig, myStore, onSaveStore, onRefresh, onEdit, onOpen, onDelete, onRenewListing, onToggleFavorite, onLeadStatusChange, onSubscribe, onFeatureListing, onRefreshPayment, onOpenPlans, onOpenStore, onChangePassword, profileForm, onProfileChange, onSaveProfile, savingProfile }) {
+function Dashboard({ auth, listings, favorites, leads, subscription, plans, payments, checkoutState, paymentConfig, myStore, onSaveStore, onRefresh, onEdit, onOpen, onDelete, onToggleFavorite, onLeadStatusChange, onSubscribe, onFeatureListing, onRefreshPayment, onOpenPlans, onOpenStore, onChangePassword, profileForm, onProfileChange, onSaveProfile, savingProfile }) {
   const upgradePlans = getUpgradePlans(plans, subscription);
   const isParticular = getCurrentPlanSlug(subscription) === 'particular' || !subscription;
   const canManageStore = ['lojista', 'premium'].includes(getCurrentPlanSlug(subscription));
@@ -945,7 +890,7 @@ function Dashboard({ auth, listings, favorites, leads, subscription, plans, paym
         <div className="section-title">
           <div>
             <h2>Meus anúncios</h2>
-            <p>Acompanhe status, validade do anúncio e renove a vitrine antes de perder posições.</p>
+            <p>Acompanhe status e atualize seus veículos.</p>
           </div>
           <button className="ghost" onClick={onRefresh}>Atualizar</button>
         </div>
@@ -954,14 +899,13 @@ function Dashboard({ auth, listings, favorites, leads, subscription, plans, paym
             <div key={listing.id} className="table-row">
               <div>
                 <strong>{listing.title}</strong>
-                <span>{currency(listing.price)} • {formatListingStatus(listing.status)} • {listing.city} • {getListingExpirationLabel(listing)}</span>
+                <span>{currency(listing.price)} • {listing.status} • {listing.city}</span>
               </div>
               <div className="actions-row wrap">
                 <button onClick={() => onOpen(listing)}>Ver</button>
                 <button onClick={() => onEdit(listing)}>Editar</button>
                 <a className="button-link success" href={buildWhatsAppUrl(listing.phone, listing.title)} target="_blank" rel="noreferrer">WhatsApp</a>
                 <button className="ghost" onClick={() => onFeatureListing(listing.id, 7)}>Destacar 7 dias</button>
-                <button className="ghost" onClick={() => onRenewListing(listing.id)}>Renovar anúncio</button>
                 <button className="danger" onClick={() => onDelete(listing.id)}>Excluir</button>
               </div>
             </div>
@@ -1314,7 +1258,7 @@ function StoresPage({ stores, onOpenStore }) {
                   </div>
                 </div>
                 <p>{store.description || 'Loja sem descrição ainda.'}</p>
-                <div className="chip-row wider"><span>{store.listingCount} anúncio(s) ativo(s)</span><span>{store.planSlug === 'premium' ? 'Premium' : 'Lojista'}</span><span>{store.planSlug === 'premium' ? 'Mais destaque regional' : 'Loja ativa na região'}</span></div>
+                <div className="chip-row"><span>{store.listingCount} anúncio(s) ativo(s)</span><span>{store.planSlug === 'premium' ? 'Premium' : 'Lojista'}</span></div>
                 <div className="actions-row wrap">
                   <button onClick={() => onOpenStore(store.userId)}>Ver loja</button>
                   {store.whatsapp && <a className="button-link success" href={buildWhatsAppUrl(store.whatsapp, store.name)} target="_blank" rel="noreferrer">WhatsApp</a>}
@@ -1341,7 +1285,6 @@ function StoreDetailPage({ store, auth, onOpenListing, onToggleFavorite, onBack 
           <div>
             <h2>{store.name}</h2>
             <p>{store.planName} • {store.city}{store.neighborhood ? ` / ${store.neighborhood}` : ''}</p>
-            <div className="chip-row wider"><span>{store.planSlug === 'premium' ? 'Vitrine premium' : 'Loja profissional'}</span><span>Contato direto por WhatsApp</span></div>
             <p>{store.description || 'Loja sem descrição.'}</p>
             <div className="actions-row wrap">
               {store.whatsapp && <a className="button-link success" href={buildWhatsAppUrl(store.whatsapp, store.name)} target="_blank" rel="noreferrer">Chamar no WhatsApp</a>}
@@ -1372,8 +1315,8 @@ function PlansPage({ plans, subscription, onSubscribe, paymentConfig }) {
       <section className="card">
         <div className="section-title">
           <div>
-            <h2>Planos comerciais premium</h2>
-            <p>{isParticular ? 'O plano Particular já fica ativo no cadastro, com 2 anúncios liberados. Compare abaixo as opções Lojista e Premium para vender com mais estoque, loja pública e vitrine profissional.' : 'Compare seu plano atual com outras opções para vender mais, ganhar destaque e ter presença regional premium.'}</p>
+            <h2>Planos comerciais</h2>
+            <p>{isParticular ? 'O plano Particular já fica ativo no cadastro, com 2 anúncios liberados. Compare abaixo as opções Lojista e Premium quando quiser expandir sua operação.' : 'Compare seu plano atual com outras opções para vender mais e ganhar destaque.'}</p>
           </div>
         </div>
         <div className="plans-grid">
@@ -1391,7 +1334,7 @@ function PlansPage({ plans, subscription, onSubscribe, paymentConfig }) {
               {plan.slug === 'particular' ? (
                 <div className="chip-row wider"><span>{currentPlanId === plan.id || isParticular ? 'Plano atual ativo' : 'Plano padrão disponível no cadastro'}</span></div>
               ) : (
-                <button disabled={currentPlanId === plan.id} onClick={() => onSubscribe(plan.id)}>{currentPlanId === plan.id ? 'Plano atual' : plan.slug === 'premium' ? 'Ativar premium por Pix' : 'Fazer upgrade e gerar Pix'}</button>
+                <button disabled={currentPlanId === plan.id} onClick={() => onSubscribe(plan.id)}>{currentPlanId === plan.id ? 'Plano atual' : 'Fazer upgrade e gerar Pix'}</button>
               )}
             </article>
           ))}
@@ -1407,7 +1350,6 @@ function PlansPage({ plans, subscription, onSubscribe, paymentConfig }) {
           <span>Pagamento confirmado</span>
           <span>Plano em ativação</span>
           <span>Plano ativo</span>
-          <span>Expiração controlada no sistema</span>
         </div>
       </section>
     </div>
@@ -1754,16 +1696,6 @@ export default function App() {
     }
   };
 
-  const renewListing = async (listingId) => {
-    try {
-      const data = await api(`/listings/${listingId}/renew`, { method: 'POST' }, auth.token);
-      setMessage(data.message || 'Anúncio renovado com sucesso.');
-      await Promise.all([fetchMyListings(), fetchListings()]);
-    } catch (error) {
-      setMessage(error.message);
-    }
-  };
-
   const toggleFeature = async (listingId, isFeatured) => {
     try {
       await api(`/admin/listings/${listingId}/feature`, { method: 'PATCH', body: JSON.stringify({ isFeatured }) }, auth.token);
@@ -1914,7 +1846,6 @@ export default function App() {
               onEdit={(listing) => setEditingListing(listing)}
               onOpen={openListing}
               onDelete={removeListing}
-              onRenewListing={renewListing}
               onToggleFavorite={toggleFavorite}
               onLeadStatusChange={updateLeadStatus}
               onSubscribe={subscribeToPlan}
