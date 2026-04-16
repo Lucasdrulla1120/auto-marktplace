@@ -19,7 +19,7 @@ function choosePrimary(images = []) {
 }
 
 function sanitizeString(value, maxLength = 500) {
-  return String(value || '').trim().slice(0, maxLength);
+  return String(value || '').trim().replace(/\s+/g, ' ').slice(0, maxLength);
 }
 
 function normalizePhone(value = '') {
@@ -79,6 +79,67 @@ function normalizePerPage(value, fallback = 12, max = 48) {
   return Math.min(perPage, max);
 }
 
+function slugify(value = '') {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 90) || 'item';
+}
+
+function isValidEmail(value = '') {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '').trim().toLowerCase());
+}
+
+function passwordValidationError(value = '') {
+  const password = String(value || '');
+  if (password.length < 6) return 'A senha precisa ter pelo menos 6 caracteres.';
+  return null;
+}
+
+function sanitizeOptionalUrl(value = '') {
+  const url = String(value || '').trim();
+  if (!url) return null;
+  return isHttpUrl(url) ? url : null;
+}
+
+function calculateListingQualityScore(data = {}, imageCount = 0, seller = {}) {
+  let score = 0;
+  const title = sanitizeString(data.title || '', 140);
+  const description = sanitizeString(data.description || '', 5000);
+
+  if (title.length >= 18) score += 12;
+  else if (title.length >= 10) score += 8;
+
+  if (description.length >= 280) score += 22;
+  else if (description.length >= 160) score += 16;
+  else if (description.length >= 80) score += 10;
+
+  if (data.price > 0) score += 8;
+  if (data.brand) score += 6;
+  if (data.model) score += 6;
+  if (data.year >= 1900) score += 6;
+  if (data.km >= 0) score += 5;
+  if (data.transmission) score += 4;
+  if (data.fuel) score += 4;
+  if (data.color) score += 3;
+  if (data.city) score += 5;
+  if (data.neighborhood) score += 4;
+  if (normalizePhone(data.phone).length >= 10) score += 5;
+
+  if (imageCount >= 10) score += 14;
+  else if (imageCount >= 6) score += 11;
+  else if (imageCount >= 3) score += 8;
+  else if (imageCount >= 1) score += 4;
+
+  if (seller.storeIsActive) score += 4;
+  if (seller.storeIsVerified) score += 6;
+
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
 module.exports = {
   toNumber,
   normalizeStatus,
@@ -88,4 +149,9 @@ module.exports = {
   validateImagesPayload,
   normalizePage,
   normalizePerPage,
+  slugify,
+  isValidEmail,
+  passwordValidationError,
+  sanitizeOptionalUrl,
+  calculateListingQualityScore,
 };

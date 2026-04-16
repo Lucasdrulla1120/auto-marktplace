@@ -35,6 +35,8 @@ const SORT_OPTIONS = [
   { value: 'price_desc', label: 'Maior preço' },
   { value: 'year_desc', label: 'Ano mais novo' },
   { value: 'km_asc', label: 'Menor KM' },
+  { value: 'quality_desc', label: 'Melhor qualidade' },
+  { value: 'views_desc', label: 'Mais vistos' },
 ];
 
 const listingInitial = {
@@ -58,6 +60,8 @@ const filterInitial = {
   minKm: '',
   maxKm: '',
   onlyWithPhoto: false,
+  verifiedStoreOnly: false,
+  featuredOnly: false,
   sortBy: 'recent',
   page: 1,
   perPage: 12,
@@ -139,9 +143,113 @@ function formatDate(dateValue) {
   return new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(date);
 }
 
+function formatNumber(value) {
+  return new Intl.NumberFormat('pt-BR').format(Number(value || 0));
+}
+
+function formatPercent(value) {
+  return `${Number(value || 0)}%`;
+}
+
+function qualityLabel(score = 0) {
+  if (score >= 90) return 'Anúncio premium';
+  if (score >= 75) return 'Boa qualidade';
+  if (score >= 60) return 'Qualidade ok';
+  return 'Pode melhorar';
+}
+
+function priceInsightLabel(insight) {
+  if (!insight?.status) return '';
+  if (insight.status === 'ABAIXO_DA_MEDIA') return 'Preço abaixo da média';
+  if (insight.status === 'ACIMA_DA_MEDIA') return 'Preço acima da média';
+  return 'Preço dentro da média';
+}
+
+function buildListingShareLink(slug = '') {
+  if (!slug || typeof window === 'undefined') return '';
+  return `${window.location.origin}${window.location.pathname}?anuncio=${encodeURIComponent(slug)}`;
+}
+
+function buildStoreShareLink(slug = '') {
+  if (!slug || typeof window === 'undefined') return '';
+  return `${window.location.origin}${window.location.pathname}?loja=${encodeURIComponent(slug)}`;
+}
+
+async function copyText(value = '') {
+  if (!value) return false;
+  if (navigator?.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return true;
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = value;
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand('copy');
+  document.body.removeChild(textarea);
+  return true;
+}
+
+function ensureMetaTag(name, attribute = 'name') {
+  let tag = document.head.querySelector(`meta[${attribute}='${name}']`);
+  if (!tag) {
+    tag = document.createElement('meta');
+    tag.setAttribute(attribute, name);
+    document.head.appendChild(tag);
+  }
+  return tag;
+}
+
+function updatePageMeta({ title, description }) {
+  if (typeof document === 'undefined') return;
+  document.title = title || MARKETPLACE_NAME;
+  ensureMetaTag('description').setAttribute('content', description || MARKETPLACE_TAGLINE);
+  ensureMetaTag('og:title', 'property').setAttribute('content', title || MARKETPLACE_NAME);
+  ensureMetaTag('og:description', 'property').setAttribute('content', description || MARKETPLACE_TAGLINE);
+}
+
 const storeProfileInitial = {
-  storeName: '', storeLogoUrl: '', storeBannerUrl: '', storeDescription: '',
-  storeCity: '', storeNeighborhood: '', storeWhatsapp: '', storeInstagram: '', storeWebsite: '', storeIsActive: true
+  storeName: '', storeSlug: '', storeLogoUrl: '', storeBannerUrl: '', storeDescription: '',
+  storeCity: '', storeNeighborhood: '', storeWhatsapp: '', storeInstagram: '', storeWebsite: '', storeIsActive: true,
+  storeIsVerified: false, storeVerifiedAt: null
+};
+
+const emptyAnalytics = {
+  totals: {
+    listings: 0,
+    approvedListings: 0,
+    pendingListings: 0,
+    featuredListings: 0,
+    views: 0,
+    whatsappClicks: 0,
+    favorites: 0,
+    leads: 0,
+    respondedLeads: 0,
+    responseRate: 0,
+    averageResponseMinutes: null,
+  },
+  leadPipeline: [],
+  topListings: [],
+};
+
+const emptyAdminData = {
+  dashboard: {
+    users: 0,
+    listings: 0,
+    pending: 0,
+    leads: 0,
+    featured: 0,
+    activeSubscriptions: 0,
+    verifiedStores: 0,
+    totalViews: 0,
+    totalWhatsappClicks: 0,
+  },
+  listings: [],
+  leads: [],
+  subscriptions: [],
+  payments: [],
+  plans: [],
+  users: [],
 };
 
 async function api(path, options = {}, token = '') {
@@ -247,7 +355,7 @@ function Header({ auth, onLogout, currentView, setCurrentView }) {
   );
 }
 
-function Hero({ listingsCount, onOpenAuth, setCurrentView }) {
+function Hero({ listingsCount, onOpenAuth, setCurrentView, canPublish }) {
   return (
     <section className="hero card">
       <div>
@@ -257,7 +365,7 @@ function Hero({ listingsCount, onOpenAuth, setCurrentView }) {
           Busca avançada, fotos otimizadas automaticamente, moderação de anúncios e contato direto por WhatsApp para fechar negócio com mais confiança.
         </p>
         <div className="actions-row wrap">
-          <button onClick={() => setCurrentView('dashboard')}>Publicar anúncio</button>
+          <button onClick={() => (canPublish ? setCurrentView('dashboard') : onOpenAuth())}>Publicar anúncio</button>
           <button className="ghost" onClick={onOpenAuth}>Entrar para anunciar</button>
           <button className="ghost" onClick={() => setCurrentView('planos')}>Ver planos comerciais</button>
         </div>
@@ -374,6 +482,8 @@ function Filters({ filters, setFilters, onRefresh, total, meta }) {
         <input placeholder="Preço mínimo" value={filters.minPrice} onChange={(e) => update('minPrice', e.target.value)} />
         <input placeholder="Preço máximo" value={filters.maxPrice} onChange={(e) => update('maxPrice', e.target.value)} />
         <label className="checkbox-row"><input type="checkbox" checked={!!filters.onlyWithPhoto} onChange={(e) => update('onlyWithPhoto', e.target.checked)} />Somente com foto</label>
+        <label className="checkbox-row"><input type="checkbox" checked={!!filters.verifiedStoreOnly} onChange={(e) => update('verifiedStoreOnly', e.target.checked)} />Somente lojas verificadas</label>
+        <label className="checkbox-row"><input type="checkbox" checked={!!filters.featuredOnly} onChange={(e) => update('featuredOnly', e.target.checked)} />Somente em destaque</label>
 
         <input placeholder="Ano mínimo" value={filters.minYear} onChange={(e) => update('minYear', e.target.value)} />
         <input placeholder="Ano máximo" value={filters.maxYear} onChange={(e) => update('maxYear', e.target.value)} />
@@ -384,9 +494,8 @@ function Filters({ filters, setFilters, onRefresh, total, meta }) {
   );
 }
 
-function ListingCard({ listing, auth, onOpen, onToggleFavorite }) {
+function ListingCard({ listing, auth, onOpen, onToggleFavorite, onWhatsApp }) {
   const primary = getPrimaryImage(listing.images);
-  const whatsappUrl = buildWhatsAppUrl(listing.phone, listing.title, listing.city);
   const sellerLabel = listing.seller?.type === 'LOJA' ? 'Loja ativa' : listing.seller?.type === 'REVENDA' ? 'Revenda' : 'Particular';
   return (
     <article className="listing-card card">
@@ -395,6 +504,7 @@ function ListingCard({ listing, auth, onOpen, onToggleFavorite }) {
         <div className="pill-stack">
           <span className={`status-pill ${(listing.status || 'APPROVED').toLowerCase()}`}>{listing.status}</span>
           {listing.isFeatured && <span className="status-pill featured">DESTAQUE</span>}
+          {!!listing.seller?.verified && <span className="status-pill approved">LOJA VERIFICADA</span>}
         </div>
       </div>
       <div className="listing-body">
@@ -409,11 +519,15 @@ function ListingCard({ listing, auth, onOpen, onToggleFavorite }) {
           <span>{listing.fuel || 'Combustível não informado'}</span>
           <span>{listing.transmission || 'Câmbio não informado'}</span>
           <span>{listing.color || 'Cor não informada'}</span>
+          <span>{qualityLabel(listing.metrics?.qualityScore || listing.qualityScore || 0)}</span>
           {!!listing.favoriteCount && <span>{listing.favoriteCount} favorito(s)</span>}
+          {!!listing.metrics?.views && <span>{formatNumber(listing.metrics.views)} visualização(ões)</span>}
+          {!!listing.marketInsight && <span>{priceInsightLabel(listing.marketInsight)}</span>}
         </div>
         <div className="actions-row wrap">
           <button onClick={() => onOpen(listing)}>Ver detalhes</button>
-          {listing.phone && <a className="button-link success" href={whatsappUrl} target="_blank" rel="noreferrer">WhatsApp</a>}
+          {listing.phone && <button type="button" className="button-link success" onClick={() => onWhatsApp?.(listing)}>WhatsApp</button>}
+          {listing.publicUrl && <button className="ghost" type="button" onClick={() => copyText(listing.publicUrl)}>Copiar link</button>}
           {auth.user && (
             <button className="ghost" onClick={() => onToggleFavorite(listing)}>
               {listing.isFavorite ? 'Desfavoritar' : 'Favoritar'}
@@ -425,12 +539,12 @@ function ListingCard({ listing, auth, onOpen, onToggleFavorite }) {
   );
 }
 
-function ListingGrid({ listings, auth, onOpen, onToggleFavorite }) {
+function ListingGrid({ listings, auth, onOpen, onToggleFavorite, onWhatsApp }) {
   if (!listings.length) return <section className="card empty">Nenhum anúncio encontrado com esses filtros.</section>;
   return (
     <section className="listing-grid">
       {listings.map((listing) => (
-        <ListingCard key={listing.id} listing={listing} auth={auth} onOpen={onOpen} onToggleFavorite={onToggleFavorite} />
+        <ListingCard key={listing.id} listing={listing} auth={auth} onOpen={onOpen} onToggleFavorite={onToggleFavorite} onWhatsApp={onWhatsApp} />
       ))}
     </section>
   );
@@ -496,15 +610,14 @@ function Gallery({ images, title }) {
   );
 }
 
-function DetailModal({ listing, auth, onClose, onToggleFavorite, refresh, relatedListings, openListing }) {
+function DetailModal({ listing, auth, onClose, onToggleFavorite, refresh, relatedListings, openListing, onWhatsApp }) {
   const [leadForm, setLeadForm] = useState({ name: '', phone: '', message: `Olá! Tenho interesse no veículo ${listing.title}.` });
   const [leadMessage, setLeadMessage] = useState('');
-  const whatsappUrl = buildWhatsAppUrl(listing.phone, listing.title);
 
   const sendLead = async (e) => {
     e.preventDefault();
     try {
-      await api(`/listings/${listing.id}/lead`, { method: 'POST', body: JSON.stringify(leadForm) }, auth.token);
+      await api(`/listings/${listing.id}/lead`, { method: 'POST', body: JSON.stringify({ ...leadForm, source: 'FORM' }) }, auth.token);
       setLeadMessage('Interesse enviado. O anunciante verá esse lead direto no painel dele.');
       setLeadForm({ name: '', phone: '', message: `Olá! Tenho interesse no veículo ${listing.title}.` });
       refresh();
@@ -512,6 +625,8 @@ function DetailModal({ listing, auth, onClose, onToggleFavorite, refresh, relate
       setLeadMessage(error.message);
     }
   };
+
+  const shareLink = listing.publicUrl || buildListingShareLink(listing.slug);
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -529,30 +644,42 @@ function DetailModal({ listing, auth, onClose, onToggleFavorite, refresh, relate
         <div className="grid two detail-grid">
           <div>
             <p>{listing.description}</p>
+            <div className="chip-row wider">
+              <span>{qualityLabel(listing.metrics?.qualityScore || listing.qualityScore || 0)} • score {listing.metrics?.qualityScore || listing.qualityScore || 0}/100</span>
+              {!!listing.metrics?.views && <span>{formatNumber(listing.metrics.views)} visualização(ões)</span>}
+              {!!listing.metrics?.whatsappClicks && <span>{formatNumber(listing.metrics.whatsappClicks)} clique(s) no WhatsApp</span>}
+              {!!listing.seller?.verified && <span>Loja verificada</span>}
+              {!!listing.marketInsight && <span>{priceInsightLabel(listing.marketInsight)}</span>}
+            </div>
+            {listing.marketInsight && (
+              <div className="insight-box">
+                <strong>{priceInsightLabel(listing.marketInsight)}</strong>
+                <p>Base interna do marketplace: média de {currency(listing.marketInsight.averagePrice)} com {listing.marketInsight.sampleSize} comparável(is) na {listing.marketInsight.basis}.</p>
+              </div>
+            )}
             <ul className="detail-list">
-              <li><strong>Anunciante:</strong> {listing.user?.companyName || listing.user?.name || 'Vendedor'}</li>
+              <li><strong>Anunciante:</strong> {listing.seller?.name || listing.user?.companyName || listing.user?.name || 'Vendedor'}{listing.seller?.verified ? ' • verificado' : ''}</li>
               <li><strong>Cidade:</strong> {listing.city}</li>
               <li><strong>Bairro:</strong> {listing.neighborhood}</li>
               <li><strong>Câmbio:</strong> {listing.transmission}</li>
               <li><strong>Combustível:</strong> {listing.fuel}</li>
               <li><strong>Cor:</strong> {listing.color}</li>
-              <li><strong>KM:</strong> {listing.km}</li>
+              <li><strong>KM:</strong> {formatNumber(listing.km)}</li>
               <li><strong>WhatsApp:</strong> {listing.phone}</li>
             </ul>
             <div className="actions-row wrap">
-              <a className="button-link success" href={whatsappUrl} target="_blank" rel="noreferrer">Falar no WhatsApp</a>
+              <button type="button" className="button-link success" onClick={() => onWhatsApp?.(listing)}>Falar no WhatsApp</button>
+              {shareLink && <button className="ghost" type="button" onClick={() => copyText(shareLink)}>Copiar link público</button>}
               {auth.user && (
-                <>
-                  <button className="ghost" onClick={() => onToggleFavorite(listing)}>
-                    {listing.isFavorite ? 'Remover dos favoritos' : 'Salvar nos favoritos'}
-                  </button>
-                                  </>
+                <button className="ghost" onClick={() => onToggleFavorite(listing)}>
+                  {listing.isFavorite ? 'Remover dos favoritos' : 'Salvar nos favoritos'}
+                </button>
               )}
             </div>
           </div>
           <form className="card lead-box" onSubmit={sendLead}>
             <h3>Enviar interesse ao anunciante</h3>
-            <p className="subtle">O contato principal é por WhatsApp. Use o botão acima para falar direto com o anunciante.</p>
+            <p className="subtle">O contato principal é por WhatsApp. Use o botão acima para falar direto com o anunciante ou registre seu interesse por aqui.</p>
             <input placeholder="Seu nome" value={leadForm.name} onChange={(e) => setLeadForm({ ...leadForm, name: e.target.value })} />
             <input placeholder="Seu telefone / WhatsApp" value={leadForm.phone} onChange={(e) => setLeadForm({ ...leadForm, phone: e.target.value })} />
             <textarea placeholder="Mensagem" value={leadForm.message} onChange={(e) => setLeadForm({ ...leadForm, message: e.target.value })} rows={5} />
@@ -769,7 +896,7 @@ function ListingForm({ auth, editing, onSaved, onCancel }) {
   );
 }
 
-function Dashboard({ auth, listings, favorites, leads, subscription, plans, payments, checkoutState, paymentConfig, myStore, onSaveStore, onRefresh, onEdit, onOpen, onDelete, onToggleFavorite, onLeadStatusChange, onSubscribe, onFeatureListing, onRefreshPayment, onOpenPlans, onOpenStore, onChangePassword }) {
+function Dashboard({ auth, listings, favorites, leads, analytics, subscription, plans, payments, checkoutState, paymentConfig, myStore, onSaveStore, onRefresh, onEdit, onOpen, onDelete, onToggleFavorite, onLeadStatusChange, onSubscribe, onFeatureListing, onRefreshPayment, onOpenPlans, onOpenStore, onChangePassword, onWhatsApp }) {
   const upgradePlans = getUpgradePlans(plans, subscription);
   const isParticular = getCurrentPlanSlug(subscription) === 'particular' || !subscription;
   const canManageStore = ['lojista', 'premium'].includes(getCurrentPlanSlug(subscription));
@@ -785,15 +912,18 @@ function Dashboard({ auth, listings, favorites, leads, subscription, plans, paym
     if (loaded?.imageUrl) setStoreForm((prev) => ({ ...prev, [field]: loaded.imageUrl }));
   };
 
+  const analyticsTotals = analytics?.totals || {
+    listings: listings.length, approvedListings: 0, pendingListings: 0, featuredListings: 0, views: 0, whatsappClicks: 0, favorites: favorites.length, leads: leads.length, respondedLeads: 0, responseRate: 0, averageResponseMinutes: null,
+  };
+
   return (
     <div className="dashboard-grid">
-      <div className="dashboard-top-grid">
+      <div className="dashboard-top-grid dashboard-top-grid-rich">
         <section className="card metric-card">
           <span>Olá, {auth.user.name}</span>
-          <strong>{favorites.length}</strong>
-          <small>Favoritos salvos</small>
+          <strong>{formatNumber(analyticsTotals.views || 0)}</strong>
+          <small>Visualizações totais no seu estoque</small>
         </section>
-
         <section className="card metric-card compact-metric">
           <span>Plano atual</span>
           <strong>{subscription?.plan?.name || 'Particular'}</strong>
@@ -801,30 +931,83 @@ function Dashboard({ auth, listings, favorites, leads, subscription, plans, paym
         </section>
         <section className="card metric-card compact-metric">
           <span>Leads recebidos</span>
-          <strong>{leads.length}</strong>
-          <small>Contatos diretos para o anunciante</small>
+          <strong>{formatNumber(analyticsTotals.leads || leads.length)}</strong>
+          <small>{formatPercent(analyticsTotals.responseRate || 0)} com resposta registrada</small>
+        </section>
+        <section className="card metric-card compact-metric">
+          <span>Cliques no WhatsApp</span>
+          <strong>{formatNumber(analyticsTotals.whatsappClicks || 0)}</strong>
+          <small>Interesse direto gerado pelos anúncios</small>
         </section>
       </div>
+
+      <section className="card">
+        <div className="section-title">
+          <div>
+            <h2>Resumo comercial</h2>
+            <p>Leitura rápida para você vender melhor antes de conversar com lojistas e parceiros da sua cidade.</p>
+          </div>
+        </div>
+        <div className="chip-row wider">
+          <span>{formatNumber(analyticsTotals.listings || listings.length)} anúncio(s) no estoque</span>
+          <span>{formatNumber(analyticsTotals.approvedListings || 0)} aprovado(s)</span>
+          <span>{formatNumber(analyticsTotals.pendingListings || 0)} em análise</span>
+          <span>{formatNumber(analyticsTotals.featuredListings || 0)} em destaque</span>
+          <span>{formatNumber(analyticsTotals.favorites || favorites.length)} favorito(s)</span>
+          <span>{analyticsTotals.averageResponseMinutes ? `${formatNumber(analyticsTotals.averageResponseMinutes)} min média de resposta` : 'Sem média de resposta ainda'}</span>
+        </div>
+        {!!analytics?.topListings?.length && (
+          <div className="table-like compact-table-top">
+            {analytics.topListings.map((item) => (
+              <div key={item.id} className="table-row stacked-row">
+                <div>
+                  <strong>{item.title}</strong>
+                  <span>{currency(item.price)} • {item.status} • score {item.qualityScore}/100</span>
+                </div>
+                <div className="chip-row">
+                  <span>{formatNumber(item.viewCount)} visualizações</span>
+                  <span>{formatNumber(item.whatsappClicks)} clique(s) no WhatsApp</span>
+                  <span>{formatNumber(item.favoriteCount)} favorito(s)</span>
+                  <span>{formatNumber(item.leadCount)} lead(s)</span>
+                </div>
+                <div className="actions-row wrap">
+                  <button onClick={() => onOpen(item)}>Abrir anúncio</button>
+                  {item.publicUrl && <button className="ghost" type="button" onClick={() => copyText(item.publicUrl)}>Copiar link</button>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
       <section className="card">
         <div className="section-title">
           <div>
             <h2>Meus anúncios</h2>
-            <p>Acompanhe status e atualize seus veículos.</p>
+            <p>Acompanhe status, qualidade, vitrine e interesse direto.</p>
           </div>
           <button className="ghost" onClick={onRefresh}>Atualizar</button>
         </div>
         <div className="table-like">
           {listings.map((listing) => (
-            <div key={listing.id} className="table-row">
+            <div key={listing.id} className="table-row stacked-row">
               <div>
                 <strong>{listing.title}</strong>
                 <span>{currency(listing.price)} • {listing.status} • {listing.city}</span>
               </div>
+              <div className="chip-row">
+                <span>Score {listing.metrics?.qualityScore || listing.qualityScore || 0}/100</span>
+                <span>{formatNumber(listing.metrics?.views || 0)} visualizações</span>
+                <span>{formatNumber(listing.metrics?.whatsappClicks || 0)} clique(s) WhatsApp</span>
+                <span>{formatNumber(listing.favoriteCount || 0)} favorito(s)</span>
+                <span>{formatNumber(listing.leadCount || 0)} lead(s)</span>
+              </div>
               <div className="actions-row wrap">
                 <button onClick={() => onOpen(listing)}>Ver</button>
                 <button onClick={() => onEdit(listing)}>Editar</button>
-                <a className="button-link success" href={buildWhatsAppUrl(listing.phone, listing.title)} target="_blank" rel="noreferrer">WhatsApp</a>
+                <button type="button" className="button-link success" onClick={() => onWhatsApp?.(listing)}>WhatsApp</button>
                 <button className="ghost" onClick={() => onFeatureListing(listing.id, 7)}>Destacar 7 dias</button>
+                {listing.publicUrl && <button className="ghost" type="button" onClick={() => copyText(listing.publicUrl)}>Copiar link</button>}
                 <button className="danger" onClick={() => onDelete(listing.id)}>Excluir</button>
               </div>
             </div>
@@ -832,16 +1015,25 @@ function Dashboard({ auth, listings, favorites, leads, subscription, plans, paym
           {listings.length === 0 && <p className="empty-inline">Você ainda não publicou anúncios.</p>}
         </div>
       </section>
+
       {canManageStore && (
         <section className="card">
           <div className="section-title">
             <div>
               <h2>Personalizar minha loja</h2>
-              <p>Só contas Lojista e Premium aparecem na página de lojas. Preencha sua vitrine pública aqui.</p>
+              <p>Essa é a sua vitrine pública para captar parceiros e fechar mais vendas na região.</p>
             </div>
+          </div>
+          <div className="chip-row wider">
+            <span>{storeForm.storeIsVerified ? 'Loja verificada' : 'Loja ainda não verificada'}</span>
+            <span>{myStore?.stats?.listingCount || 0} anúncio(s) publicados</span>
+            <span>{formatNumber(myStore?.stats?.totalViews || 0)} visualizações na loja</span>
+            <span>{formatNumber(myStore?.stats?.totalWhatsappClicks || 0)} clique(s) no WhatsApp</span>
+            {myStore?.publicUrl && <span>{myStore.publicUrl}</span>}
           </div>
           <div className="grid four">
             <label className="field-group"><span>Nome da loja</span><input value={storeForm.storeName} onChange={(e) => setStoreForm({ ...storeForm, storeName: e.target.value })} /></label>
+            <label className="field-group"><span>Slug público</span><input value={storeForm.storeSlug} onChange={(e) => setStoreForm({ ...storeForm, storeSlug: e.target.value })} /></label>
             <label className="field-group"><span>WhatsApp da loja</span><input value={storeForm.storeWhatsapp} onChange={(e) => setStoreForm({ ...storeForm, storeWhatsapp: e.target.value })} /></label>
             <label className="field-group"><span>Cidade</span><input value={storeForm.storeCity} onChange={(e) => setStoreForm({ ...storeForm, storeCity: e.target.value })} /></label>
             <label className="field-group"><span>Bairro</span><input value={storeForm.storeNeighborhood} onChange={(e) => setStoreForm({ ...storeForm, storeNeighborhood: e.target.value })} /></label>
@@ -859,15 +1051,17 @@ function Dashboard({ auth, listings, favorites, leads, subscription, plans, paym
           <label className="field-group"><span>Descrição da loja</span><textarea rows="4" value={storeForm.storeDescription} onChange={(e) => setStoreForm({ ...storeForm, storeDescription: e.target.value })} /></label>
           <div className="actions-row wrap">
             <label className="checkbox-row"><input type="checkbox" checked={!!storeForm.storeIsActive} onChange={(e) => setStoreForm({ ...storeForm, storeIsActive: e.target.checked })} /><span>Exibir minha loja publicamente</span></label>
+            {myStore?.publicUrl && <button className="ghost" type="button" onClick={() => copyText(myStore.publicUrl)}>Copiar link da loja</button>}
             <button onClick={() => onSaveStore(storeForm)}>Salvar loja</button>
           </div>
         </section>
       )}
+
       <section className="card">
         <div className="section-title">
           <div>
             <h2>Contato por WhatsApp</h2>
-            <p>Todos os contatos acontecem pelo WhatsApp para manter a negociação simples e rápida.</p>
+            <p>Gerencie os leads e marque o estágio de cada negociação para medir resposta e conversão.</p>
           </div>
         </div>
         <div className="lead-list">
@@ -876,15 +1070,27 @@ function Dashboard({ auth, listings, favorites, leads, subscription, plans, paym
               <div className="between">
                 <div>
                   <strong>{lead.name}</strong>
-                  <p>{lead.listing?.title || 'Anúncio'}</p>
+                  <p>{lead.listing?.title || 'Anúncio'} • {lead.source || 'FORM'}</p>
                 </div>
-                <a className="button-link success" href={buildWhatsAppUrl(lead.phone || lead.listing?.phone, lead.listing?.title || '')} target="_blank" rel="noreferrer">Chamar no WhatsApp</a>
+                <button type="button" className="button-link success" onClick={() => window.open(buildWhatsAppUrl(lead.phone || lead.listing?.phone, lead.listing?.title || ''), '_blank', 'noopener,noreferrer')}>Chamar no WhatsApp</button>
               </div>
               <p>{lead.message}</p>
+              <div className="actions-row wrap">
+                <select value={lead.status} onChange={(e) => onLeadStatusChange(lead.id, e.target.value)}>
+                  <option value="NEW">Novo</option>
+                  <option value="CONTACTED">Contactado</option>
+                  <option value="NEGOTIATING">Negociando</option>
+                  <option value="CLOSED">Fechado</option>
+                  <option value="LOST">Perdido</option>
+                </select>
+                <span className="subtle">Recebido em {formatDate(lead.createdAt)}</span>
+                {lead.firstResponseAt && <span className="subtle">1a resposta em {formatDate(lead.firstResponseAt)}</span>}
+              </div>
             </article>
           )) : <p className="subtle">Quando alguém enviar interesse, você verá os contatos aqui para seguir pelo WhatsApp.</p>}
         </div>
       </section>
+
       <section className="card plan-flow-card">
         <div className="section-title">
           <div>
@@ -941,19 +1147,23 @@ function Dashboard({ auth, listings, favorites, leads, subscription, plans, paym
         <div className="section-title">
           <div>
             <h2>Meus favoritos</h2>
-            <p>Somente favoritos aparecem como métrica principal para o usuário comum.</p>
+            <p>Seu radar de oportunidades para acompanhar preços e concorrentes da região.</p>
           </div>
         </div>
         <div className="table-like">
           {favorites.map((listing) => (
-            <div key={listing.id} className="table-row">
+            <div key={listing.id} className="table-row stacked-row">
               <div>
                 <strong>{listing.title}</strong>
                 <span>{listing.city} • {currency(listing.price)}</span>
               </div>
+              <div className="chip-row">
+                <span>{qualityLabel(listing.metrics?.qualityScore || listing.qualityScore || 0)}</span>
+                {!!listing.favoriteCount && <span>{listing.favoriteCount} favorito(s)</span>}
+              </div>
               <div className="actions-row wrap">
                 <button onClick={() => onOpen(listing)}>Abrir</button>
-                <a className="button-link success" href={buildWhatsAppUrl(listing.phone, listing.title)} target="_blank" rel="noreferrer">WhatsApp</a>
+                <button type="button" className="button-link success" onClick={() => onWhatsApp?.(listing)}>WhatsApp</button>
                 <button className="ghost" onClick={() => onToggleFavorite(listing)}>Remover</button>
               </div>
             </div>
@@ -1001,7 +1211,7 @@ function ChangePasswordCard({ onSubmit }) {
   );
 }
 
-function AdminPanel({ adminData, refreshAdmin, changeStatus, toggleFeature, updatePaymentStatus, updatePlan, createPlan, deletePlan }) {
+function AdminPanel({ adminData, refreshAdmin, changeStatus, toggleFeature, updatePaymentStatus, updatePlan, createPlan, deletePlan, toggleStoreVerification }) {
   const emptyPlan = { name: '', slug: '', priceMonthly: '', listingLimit: '', featuredSlots: '', displayOrder: '', isRecommended: false, isActive: true, description: '', benefits: '' };
   const [editingPlan, setEditingPlan] = useState(null);
   const [planForm, setPlanForm] = useState(emptyPlan);
@@ -1036,6 +1246,9 @@ function AdminPanel({ adminData, refreshAdmin, changeStatus, toggleFeature, upda
         <div><strong>{adminData.dashboard.leads}</strong><span>Leads</span></div>
         <div><strong>{adminData.dashboard.featured || 0}</strong><span>Destaques</span></div>
         <div><strong>{adminData.dashboard.activeSubscriptions || 0}</strong><span>Assinaturas ativas</span></div>
+        <div><strong>{adminData.dashboard.verifiedStores || 0}</strong><span>Lojas verificadas</span></div>
+        <div><strong>{formatNumber(adminData.dashboard.totalViews || 0)}</strong><span>Views totais</span></div>
+        <div><strong>{formatNumber(adminData.dashboard.totalWhatsappClicks || 0)}</strong><span>Cliques WhatsApp</span></div>
       </section>
 
       <section className="card">
@@ -1083,7 +1296,7 @@ function AdminPanel({ adminData, refreshAdmin, changeStatus, toggleFeature, upda
         </div>
       </section>
 
-      <section className="card"><div className="section-title"><div><h2>Usuários</h2><p>Gerencie usuários e acompanhe seus volumes.</p></div></div><div className="table-like">{(adminData.users || []).map((user) => <div key={user.id} className="table-row"><div><strong>{user.name}</strong><span>{user.email} • {user.role} • {user.companyName || 'Sem empresa'}</span></div><span>{user._count?.listings || 0} anúncio(s)</span></div>)}{!(adminData.users || []).length && <p className="empty-inline">Nenhum usuário encontrado.</p>}</div></section>
+      <section className="card"><div className="section-title"><div><h2>Usuários</h2><p>Gerencie usuários, lojas e acompanhe seus volumes.</p></div></div><div className="table-like">{(adminData.users || []).map((user) => <div key={user.id} className="table-row stacked-row"><div><strong>{user.name}</strong><span>{user.email} • {user.role} • {user.companyName || 'Sem empresa'}</span></div><div className="chip-row"><span>{user._count?.listings || 0} anúncio(s)</span>{user.storeIsActive && <span>Loja ativa</span>}{user.storeIsVerified && <span>Loja verificada</span>}{user.storeSlug && <span>/{user.storeSlug}</span>}</div><div className="actions-row wrap">{user.role !== 'ADMIN' && <button className={user.storeIsVerified ? 'ghost' : ''} onClick={() => toggleStoreVerification(user.id, !user.storeIsVerified)}>{user.storeIsVerified ? 'Remover verificação' : 'Verificar loja'}</button>}</div></div>)}{!(adminData.users || []).length && <p className="empty-inline">Nenhum usuário encontrado.</p>}</div></section>
 
       <section className="card">
         <div className="section-title"><div><h2>Anúncios do sistema</h2><p>O admin agora modera anúncios pendentes e controla destaques quando necessário.</p></div></div>
@@ -1151,7 +1364,7 @@ function StoresPage({ stores, onOpenStore }) {
   return (
     <div className="dashboard-grid">
       <section className="card">
-        <div className="section-title"><div><h2>Lojas</h2><p>Só aparecem contas Lojista e Premium com loja ativa e anúncios ativos.</p></div></div>
+        <div className="section-title"><div><h2>Lojas</h2><p>Só aparecem contas Lojista e Premium com loja ativa, assinatura válida e anúncios ativos.</p></div></div>
         <div className="grid four">
           <input placeholder="Buscar loja" value={filters.q} onChange={(e) => setFilters({ ...filters, q: e.target.value })} />
           <input placeholder="Cidade" value={filters.city} onChange={(e) => setFilters({ ...filters, city: e.target.value })} />
@@ -1171,10 +1384,16 @@ function StoresPage({ stores, onOpenStore }) {
                   </div>
                 </div>
                 <p>{store.description || 'Loja sem descrição ainda.'}</p>
-                <div className="chip-row"><span>{store.listingCount} anúncio(s) ativo(s)</span><span>{store.planSlug === 'premium' ? 'Premium' : 'Lojista'}</span></div>
+                <div className="chip-row">
+                  <span>{store.listingCount} anúncio(s) ativo(s)</span>
+                  <span>{store.planSlug === 'premium' ? 'Premium' : 'Lojista'}</span>
+                  {!!store.verified && <span>Verificada</span>}
+                  {!!store.stats?.totalViews && <span>{formatNumber(store.stats.totalViews)} visualizações</span>}
+                </div>
                 <div className="actions-row wrap">
-                  <button onClick={() => onOpenStore(store.userId)}>Ver loja</button>
-                  {store.whatsapp && <a className="button-link success" href={buildWhatsAppUrl(store.whatsapp, store.name)} target="_blank" rel="noreferrer">WhatsApp</a>}
+                  <button onClick={() => onOpenStore(store.slug || store.userId)}>Ver loja</button>
+                  {store.publicUrl && <button className="ghost" type="button" onClick={() => copyText(store.publicUrl)}>Copiar link</button>}
+                  {store.whatsapp && <button type="button" className="button-link success" onClick={() => window.open(buildWhatsAppUrl(store.whatsapp, store.name), '_blank', 'noopener,noreferrer')}>WhatsApp</button>}
                 </div>
               </div>
             </article>
@@ -1186,7 +1405,8 @@ function StoresPage({ stores, onOpenStore }) {
   );
 }
 
-function StoreDetailPage({ store, auth, onOpenListing, onToggleFavorite, onBack }) {
+
+function StoreDetailPage({ store, auth, onOpenListing, onToggleFavorite, onBack, onWhatsApp }) {
   if (!store) return null;
   return (
     <div className="dashboard-grid">
@@ -1199,8 +1419,16 @@ function StoreDetailPage({ store, auth, onOpenListing, onToggleFavorite, onBack 
             <h2>{store.name}</h2>
             <p>{store.planName} • {store.city}{store.neighborhood ? ` / ${store.neighborhood}` : ''}</p>
             <p>{store.description || 'Loja sem descrição.'}</p>
+            <div className="chip-row wider">
+              {!!store.verified && <span>Loja verificada</span>}
+              <span>{store.stats?.listingCount || 0} anúncio(s)</span>
+              <span>{formatNumber(store.stats?.totalViews || 0)} visualizações</span>
+              <span>{formatNumber(store.stats?.totalWhatsappClicks || 0)} clique(s) no WhatsApp</span>
+              <span>Score médio {store.stats?.averageQualityScore || 0}/100</span>
+            </div>
             <div className="actions-row wrap">
-              {store.whatsapp && <a className="button-link success" href={buildWhatsAppUrl(store.whatsapp, store.name)} target="_blank" rel="noreferrer">Chamar no WhatsApp</a>}
+              {store.whatsapp && <button type="button" className="button-link success" onClick={() => window.open(buildWhatsAppUrl(store.whatsapp, store.name), '_blank', 'noopener,noreferrer')}>Chamar no WhatsApp</button>}
+              {store.publicUrl && <button className="ghost" type="button" onClick={() => copyText(store.publicUrl)}>Copiar link da loja</button>}
               {store.instagram && <span className="subtle">{store.instagram}</span>}
             </div>
           </div>
@@ -1208,11 +1436,12 @@ function StoreDetailPage({ store, auth, onOpenListing, onToggleFavorite, onBack 
       </section>
       <section className="card">
         <div className="section-title"><div><h2>Anúncios da loja</h2><p>Ao clicar em uma loja, aparecem apenas os anúncios dela.</p></div></div>
-        <ListingGrid listings={store.listings || []} auth={auth} onOpen={onOpenListing} onToggleFavorite={onToggleFavorite} />
+        <ListingGrid listings={store.listings || []} auth={auth} onOpen={onOpenListing} onToggleFavorite={onToggleFavorite} onWhatsApp={onWhatsApp} />
       </section>
     </div>
   );
 }
+
 
 function PlansPage({ plans, subscription, onSubscribe, paymentConfig }) {
   const isParticular = getCurrentPlanSlug(subscription) === 'particular' || !subscription;
@@ -1282,6 +1511,7 @@ export default function App() {
   const [myListings, setMyListings] = useState([]);
   const [favoriteListings, setFavoriteListings] = useState([]);
   const [sellerLeads, setSellerLeads] = useState([]);
+  const [analytics, setAnalytics] = useState(emptyAnalytics);
   const [plans, setPlans] = useState([]);
   const [payments, setPayments] = useState([]);
   const [stores, setStores] = useState([]);
@@ -1293,7 +1523,7 @@ export default function App() {
   const [selectedStore, setSelectedStore] = useState(null);
   const [editingListing, setEditingListing] = useState(null);
   const [message, setMessage] = useState('');
-  const [adminData, setAdminData] = useState({ dashboard: { users: 0, listings: 0, pending: 0, leads: 0, featured: 0, activeSubscriptions: 0 }, listings: [], leads: [], subscriptions: [], payments: [], plans: [], users: [] });
+  const [adminData, setAdminData] = useState(emptyAdminData);
 
   useEffect(() => {
     localStorage.setItem('automarket-auth', JSON.stringify(auth));
@@ -1342,6 +1572,17 @@ export default function App() {
     try {
       const leads = await api('/listings/mine/leads', {}, auth.token);
       setSellerLeads(leads);
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+
+  const fetchAnalytics = async () => {
+    if (!auth.user) return setAnalytics(emptyAnalytics);
+    try {
+      const data = await api('/listings/mine/analytics', {}, auth.token);
+      setAnalytics(data || emptyAnalytics);
     } catch (error) {
       setMessage(error.message);
     }
@@ -1415,6 +1656,7 @@ export default function App() {
       fetchMyListings(),
       fetchFavoriteListings(),
       fetchSellerLeads(),
+      fetchAnalytics(),
       fetchSubscription(),
       fetchMyStore(),
       auth.user.role === 'ADMIN' ? fetchAdmin() : Promise.resolve(),
@@ -1436,6 +1678,33 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const restoreDeepLink = async () => {
+      if (typeof window === 'undefined') return;
+      const params = new URLSearchParams(window.location.search);
+      const listingSlug = params.get('anuncio');
+      const storeSlug = params.get('loja');
+
+      try {
+        if (listingSlug) {
+          const data = await api(`/listings/slug/${encodeURIComponent(listingSlug)}`, {}, auth.token);
+          setSelectedListing(data);
+          setCurrentView('home');
+          return;
+        }
+        if (storeSlug) {
+          const data = await api(`/stores/slug/${encodeURIComponent(storeSlug)}`);
+          setSelectedStore(data);
+          setCurrentView('store');
+        }
+      } catch (error) {
+        setMessage(error.message);
+      }
+    };
+
+    restoreDeepLink();
+  }, []);
+
+  useEffect(() => {
     const timer = setTimeout(() => {
       fetchListings();
     }, 250);
@@ -1449,12 +1718,52 @@ export default function App() {
       setMyListings([]);
       setFavoriteListings([]);
       setSellerLeads([]);
+      setAnalytics(emptyAnalytics);
       setSubscription(null);
       setPayments([]);
       setMyStore({ canManageStore: false, planSlug: 'particular', planName: 'Particular', profile: storeProfileInitial });
-      setAdminData({ dashboard: { users: 0, listings: 0, pending: 0, leads: 0, featured: 0, activeSubscriptions: 0 }, listings: [], leads: [], subscriptions: [], payments: [], plans: [], users: [] });
+      setAdminData(emptyAdminData);
     }
   }, [auth.user, auth.token]);
+
+  useEffect(() => {
+    if (selectedListing) {
+      updatePageMeta({
+        title: `${selectedListing.title} em ${selectedListing.city || MARKETPLACE_CITY} | ${MARKETPLACE_NAME}`,
+        description: `${selectedListing.brand || ''} ${selectedListing.model || ''} ${selectedListing.year || ''} por ${currency(selectedListing.price)} em ${selectedListing.city || MARKETPLACE_CITY}. Fale direto com o anunciante no ${MARKETPLACE_NAME}.`,
+      });
+      return;
+    }
+
+    if (currentView === 'store' && selectedStore) {
+      updatePageMeta({
+        title: `${selectedStore.name} | Loja em ${selectedStore.city || MARKETPLACE_CITY} | ${MARKETPLACE_NAME}`,
+        description: `${selectedStore.description || 'Veja o estoque completo da loja.'} ${formatNumber(selectedStore.stats?.listingCount || 0)} anúncio(s) ativos em ${selectedStore.city || MARKETPLACE_CITY}.`,
+      });
+      return;
+    }
+
+    if (currentView === 'dashboard' && auth.user) {
+      updatePageMeta({
+        title: `Painel do anunciante | ${MARKETPLACE_NAME}`,
+        description: `Gerencie estoque, leads, loja pública e resultados comerciais no ${MARKETPLACE_NAME}.`,
+      });
+      return;
+    }
+
+    if (currentView === 'lojas') {
+      updatePageMeta({
+        title: `Lojas verificadas em ${MARKETPLACE_CITY} | ${MARKETPLACE_NAME}`,
+        description: `Encontre lojas e parceiros automotivos da sua região com vitrine pública, WhatsApp e estoque ativo no ${MARKETPLACE_NAME}.`,
+      });
+      return;
+    }
+
+    updatePageMeta({
+      title: `${MARKETPLACE_NAME} | Veículos em ${MARKETPLACE_CITY}`,
+      description: `${MARKETPLACE_TAGLINE} ${formatNumber(listingMeta.total || listings.length)} anúncio(s) disponíveis em ${MARKETPLACE_CITY}.`,
+    });
+  }, [selectedListing, selectedStore, currentView, auth.user, listingMeta.total, listings.length]);
 
   useEffect(() => {
     if (!checkoutState) return;
@@ -1501,6 +1810,29 @@ export default function App() {
     };
   }, [checkoutState?.paymentId, auth.token]);
 
+  const updateBrowserState = ({ anuncio = null, loja = null } = {}) => {
+    if (typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    if (anuncio) url.searchParams.set('anuncio', anuncio);
+    else url.searchParams.delete('anuncio');
+    if (loja) url.searchParams.set('loja', loja);
+    else url.searchParams.delete('loja');
+    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+  };
+
+  const patchListingWhatsappCount = (collection = [], listingId) => collection.map((item) => {
+    if (item.id !== listingId) return item;
+    const currentCount = item.metrics?.whatsappClicks ?? item.whatsappClicks ?? 0;
+    return {
+      ...item,
+      whatsappClicks: currentCount + 1,
+      metrics: {
+        ...(item.metrics || {}),
+        whatsappClicks: currentCount + 1,
+      },
+    };
+  });
+
   const handleAuthSuccess = (data) => {
     setAuth(data);
     setCurrentView(data.user?.role === 'ADMIN' ? 'admin' : 'dashboard');
@@ -1510,8 +1842,11 @@ export default function App() {
   const logout = () => {
     setAuth(emptyAuth);
     setCurrentView('home');
+    setSelectedListing(null);
+    setSelectedStore(null);
     setEditingListing(null);
     setFilters(filterInitial);
+    updateBrowserState();
   };
 
   const toggleFavorite = async (listing) => {
@@ -1557,7 +1892,7 @@ export default function App() {
   const updateLeadStatus = async (leadId, status) => {
     try {
       await api(`/listings/leads/${leadId}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }, auth.token);
-      await fetchSellerLeads();
+      await Promise.all([fetchSellerLeads(), fetchAnalytics()]);
     } catch (error) {
       setMessage(error.message);
     }
@@ -1638,6 +1973,16 @@ export default function App() {
     }
   };
 
+  const toggleStoreVerification = async (userId, verified) => {
+    try {
+      await api(`/admin/users/${userId}/store-verification`, { method: 'PATCH', body: JSON.stringify({ storeIsVerified: verified }) }, auth.token);
+      setMessage(verified ? 'Loja verificada com sucesso.' : 'Verificação da loja removida.');
+      await Promise.all([fetchAdmin(), fetchStores()]);
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
   const deletePlan = async (planId) => {
     try {
       await api(`/plans/admin/plans/${planId}`, { method: 'DELETE' }, auth.token);
@@ -1653,7 +1998,7 @@ export default function App() {
       await api('/stores/me', { method: 'PUT', body: JSON.stringify(payload) }, auth.token);
       setMessage('Loja atualizada com sucesso.');
       await Promise.all([fetchMyStore(), fetchStores()]);
-      setCurrentView('lojas');
+      setCurrentView('dashboard');
     } catch (error) {
       setMessage(error.message);
     }
@@ -1663,20 +2008,67 @@ export default function App() {
     return api('/auth/change-password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) }, auth.token);
   };
 
+  const closeListing = () => {
+    setSelectedListing(null);
+    updateBrowserState({ loja: currentView === 'store' ? selectedStore?.slug || selectedStore?.storeSlug || null : null });
+  };
+
+  const closeStore = () => {
+    setSelectedStore(null);
+    setCurrentView('lojas');
+    updateBrowserState();
+  };
+
+  const handleListingWhatsApp = async (listing) => {
+    if (!listing?.phone) {
+      setMessage('Esse anúncio ainda não tem telefone cadastrado.');
+      return;
+    }
+
+    try {
+      await api(`/listings/${listing.id}/track/whatsapp`, { method: 'POST' }, auth.token);
+      setListings((prev) => patchListingWhatsappCount(prev, listing.id));
+      setMyListings((prev) => patchListingWhatsappCount(prev, listing.id));
+      setFavoriteListings((prev) => patchListingWhatsappCount(prev, listing.id));
+      setSelectedListing((prev) => {
+        if (!prev || prev.id !== listing.id) return prev;
+        const currentCount = prev.metrics?.whatsappClicks ?? prev.whatsappClicks ?? 0;
+        return {
+          ...prev,
+          whatsappClicks: currentCount + 1,
+          metrics: {
+            ...(prev.metrics || {}),
+            whatsappClicks: currentCount + 1,
+          },
+        };
+      });
+      if (auth.user) await fetchAnalytics();
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      window.open(buildWhatsAppUrl(listing.phone, listing.title, listing.city), '_blank', 'noopener,noreferrer');
+    }
+  };
+
   const openListing = async (listing) => {
     try {
-      const data = await api(`/listings/${listing.id}`, {}, auth.token);
+      const endpoint = listing.slug ? `/listings/slug/${encodeURIComponent(listing.slug)}` : `/listings/${listing.id}`;
+      const data = await api(endpoint, {}, auth.token);
       setSelectedListing(data);
+      updateBrowserState({ anuncio: data.slug || listing.slug, loja: currentView === 'store' ? selectedStore?.slug || selectedStore?.storeSlug || null : null });
     } catch (error) {
       setMessage(error.message);
     }
   };
 
-  const openStore = async (userId) => {
+  const openStore = async (storeRef) => {
     try {
-      const data = await api(`/stores/${userId}`);
+      const isSlug = typeof storeRef === 'string' && !/^cm[0-9a-z]+$/i.test(storeRef) && !/^\d+$/.test(storeRef);
+      const endpoint = isSlug ? `/stores/slug/${encodeURIComponent(storeRef)}` : `/stores/${storeRef}`;
+      const data = await api(endpoint);
       setSelectedStore(data);
       setCurrentView('store');
+      updateBrowserState({ loja: data.slug || data.storeSlug || (isSlug ? storeRef : null) });
     } catch (error) {
       setMessage(error.message);
     }
@@ -1694,9 +2086,9 @@ export default function App() {
       <main className="container">
         {currentView === 'home' && (
           <>
-            <Hero listingsCount={listingMeta.total || listings.length} onOpenAuth={() => setCurrentView(auth.user ? 'dashboard' : 'auth')} setCurrentView={setCurrentView} />
+            <Hero listingsCount={listingMeta.total || listings.length} onOpenAuth={() => setCurrentView(auth.user ? 'dashboard' : 'auth')} setCurrentView={setCurrentView} canPublish={!!auth.user} />
             <Filters filters={filters} setFilters={setFilters} onRefresh={fetchListings} total={listingMeta.total || listings.length} meta={listingMeta} />
-            <ListingGrid listings={listings} auth={auth} onOpen={openListing} onToggleFavorite={toggleFavorite} />
+            <ListingGrid listings={listings} auth={auth} onOpen={openListing} onToggleFavorite={toggleFavorite} onWhatsApp={handleListingWhatsApp} />
             <PaginationBar meta={listingMeta} onChange={(page) => setFilters((prev) => ({ ...prev, page }))} />
           </>
         )}
@@ -1711,6 +2103,7 @@ export default function App() {
               listings={myListings}
               favorites={favoriteListings}
               leads={sellerLeads}
+              analytics={analytics}
               subscription={subscription}
               plans={plans}
               payments={payments}
@@ -1728,29 +2121,31 @@ export default function App() {
               onFeatureListing={featureListing}
               onRefreshPayment={refreshPaymentStatus}
               onOpenPlans={() => setCurrentView('planos')}
-              onOpenStore={() => openStore(auth.user.id)}
+              onOpenStore={() => openStore(myStore?.profile?.storeSlug || auth.user.id)}
               onChangePassword={handleChangePassword}
+              onWhatsApp={handleListingWhatsApp}
             />
           </>
         )}
 
         {currentView === 'admin' && auth.user?.role === 'ADMIN' && (
-          <AdminPanel adminData={adminData} refreshAdmin={fetchAdmin} changeStatus={changeStatus} toggleFeature={toggleFeature} updatePaymentStatus={updatePaymentStatus} updatePlan={updatePlan} createPlan={createPlan} deletePlan={deletePlan} />
+          <AdminPanel adminData={adminData} refreshAdmin={fetchAdmin} changeStatus={changeStatus} toggleFeature={toggleFeature} updatePaymentStatus={updatePaymentStatus} updatePlan={updatePlan} createPlan={createPlan} deletePlan={deletePlan} toggleStoreVerification={toggleStoreVerification} />
         )}
 
         {currentView === 'lojas' && <StoresPage stores={stores} onOpenStore={openStore} />}
-        {currentView === 'store' && selectedStore && <StoreDetailPage store={selectedStore} auth={auth} onOpenListing={openListing} onToggleFavorite={toggleFavorite} onBack={() => setCurrentView('lojas')} />}
+        {currentView === 'store' && selectedStore && <StoreDetailPage store={selectedStore} auth={auth} onOpenListing={openListing} onToggleFavorite={toggleFavorite} onBack={closeStore} onWhatsApp={handleListingWhatsApp} />}
         {currentView === 'planos' && <PlansPage plans={plans} subscription={subscription} onSubscribe={subscribeToPlan} paymentConfig={paymentConfig} />}
       </main>
       {selectedListing && (
         <DetailModal
           listing={selectedListing}
           auth={auth}
-          onClose={() => setSelectedListing(null)}
+          onClose={closeListing}
           onToggleFavorite={toggleFavorite}
           refresh={refreshAll}
           relatedListings={relatedListings}
           openListing={openListing}
+          onWhatsApp={handleListingWhatsApp}
         />
       )}
     </div>

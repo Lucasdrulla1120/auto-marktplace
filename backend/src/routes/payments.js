@@ -3,6 +3,7 @@ const prisma = require('../utils/prisma');
 const { authRequired, adminRequired } = require('../middleware/auth');
 const { createPixPayment, makeExternalRef, verifyWebhookSignature, hasMercadoPagoConfig, getPaymentById, normalizePaymentStatus } = require('../utils/mercadoPago');
 const { addDays, runMarketplaceMaintenance, getCurrentSubscription } = require('../utils/marketplaceLifecycle');
+const { rateLimit } = require('../middleware/rateLimit');
 
 const router = express.Router();
 
@@ -132,7 +133,7 @@ router.get('/mine', authRequired, async (req, res) => {
   res.json(payments);
 });
 
-router.post('/feature-listing', authRequired, async (req, res) => {
+router.post('/feature-listing', authRequired, rateLimit({ windowMs: 30 * 60 * 1000, max: 12, message: 'Muitas tentativas de destacar anúncios. Aguarde alguns minutos.' }), async (req, res) => {
   await runMarketplaceMaintenance();
   const listingId = Number(req.body.listingId);
   const featureOffer = getFeaturedPrice(req.body.days || 7);
@@ -174,7 +175,7 @@ router.post('/feature-listing', authRequired, async (req, res) => {
   res.status(201).json({ payment, checkout, featureDays: featureOffer.days });
 });
 
-router.post('/webhook/mercadopago', async (req, res) => {
+router.post('/webhook/mercadopago', rateLimit({ windowMs: 60 * 1000, max: 120, message: 'Muitos eventos recebidos em pouco tempo.' }), async (req, res) => {
   const validSignature = verifyWebhookSignature(req);
   const externalId = req.body.data?.id ? String(req.body.data.id) : null;
   const event = await prisma.webhookEvent.create({
@@ -220,7 +221,7 @@ router.get('/admin/all', authRequired, adminRequired, async (req, res) => {
   res.json(payments);
 });
 
-router.post('/:id/refresh', authRequired, async (req, res) => {
+router.post('/:id/refresh', authRequired, rateLimit({ windowMs: 60 * 1000, max: 20, message: 'Muitas atualizações de pagamento em pouco tempo.' }), async (req, res) => {
   const payment = await prisma.payment.findUnique({ where: { id: Number(req.params.id) }, include: { subscription: true, listing: true } });
   if (!payment) return res.status(404).json({ message: 'Pagamento não encontrado.' });
   if (payment.userId !== req.user.id && req.user.role !== 'ADMIN') return res.status(403).json({ message: 'Sem permissão para atualizar este pagamento.' });

@@ -8,72 +8,83 @@ datasource db {
 }
 
 model User {
-  id                 Int                   @id @default(autoincrement())
-  name               String
-  email              String                @unique
-  phone              String
-  passwordHash       String
-  role               String                @default("USER")
-  companyName        String?
-  storeName          String?
-  storeLogoUrl       String?
-  storeBannerUrl     String?
-  storeDescription   String?
-  storeCity          String?
-  storeNeighborhood  String?
-  storeWhatsapp      String?
-  storeInstagram     String?
-  storeWebsite       String?
-  storeIsActive      Boolean               @default(false)
-  createdAt          DateTime              @default(now())
-  listings           Listing[]
-  favorites          Favorite[]
-  subscriptions      Subscription[]
-  payments           Payment[]
-  buyerConversations Conversation[]        @relation("BuyerConversations")
-  sellerConversations Conversation[]       @relation("SellerConversations")
-  chatMessages       ChatMessage[]
+  id                  Int                   @id @default(autoincrement())
+  name                String
+  email               String                @unique
+  phone               String
+  passwordHash        String
+  role                String                @default("USER")
+  companyName         String?
+  storeName           String?
+  storeSlug           String?               @unique
+  storeLogoUrl        String?
+  storeBannerUrl      String?
+  storeDescription    String?
+  storeCity           String?
+  storeNeighborhood   String?
+  storeWhatsapp       String?
+  storeInstagram      String?
+  storeWebsite        String?
+  storeIsActive       Boolean               @default(false)
+  storeIsVerified     Boolean               @default(false)
+  storeVerifiedAt     DateTime?
+  createdAt           DateTime              @default(now())
+  listings            Listing[]
+  favorites           Favorite[]
+  subscriptions       Subscription[]
+  payments            Payment[]
+  buyerConversations  Conversation[]        @relation("BuyerConversations")
+  sellerConversations Conversation[]        @relation("SellerConversations")
+  chatMessages        ChatMessage[]
   passwordResetTokens PasswordResetToken[]
 
   @@index([role, createdAt])
+  @@index([storeIsActive, storeIsVerified, createdAt])
 }
 
 model Listing {
-  id            Int            @id @default(autoincrement())
-  userId        Int
-  title         String
-  description   String
-  price         Float
-  brand         String
-  model         String
-  year          Int
-  km            Int
-  transmission  String
-  fuel          String
-  color         String
-  city          String
-  neighborhood  String
-  phone         String
-  status        String         @default("PENDING")
-  isFeatured    Boolean        @default(false)
-  featuredUntil DateTime?
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
-  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  images        ListingImage[]
-  favorites     Favorite[]
-  leads         Lead[]
-  payments      Payment[]
-  conversations Conversation[]
+  id             Int            @id @default(autoincrement())
+  userId         Int
+  slug           String         @unique
+  title          String
+  description    String
+  price          Float
+  brand          String
+  model          String
+  year           Int
+  km             Int
+  transmission   String
+  fuel           String
+  color          String
+  city           String
+  neighborhood   String
+  phone          String
+  status         String         @default("PENDING")
+  qualityScore   Int            @default(0)
+  viewCount      Int            @default(0)
+  whatsappClicks Int            @default(0)
+  isFeatured     Boolean        @default(false)
+  featuredUntil  DateTime?
+  publishedAt    DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  images         ListingImage[]
+  favorites      Favorite[]
+  leads          Lead[]
+  payments       Payment[]
+  conversations  Conversation[]
 
   @@index([userId, status])
   @@index([status, isFeatured, createdAt(sort: Desc)])
+  @@index([status, qualityScore, createdAt(sort: Desc)])
   @@index([brand, model])
   @@index([city, neighborhood])
   @@index([price])
   @@index([year])
   @@index([km])
   @@index([featuredUntil])
+  @@index([publishedAt])
 }
 
 model ListingImage {
@@ -101,16 +112,19 @@ model Favorite {
 }
 
 model Lead {
-  id        Int      @id @default(autoincrement())
-  listingId Int
-  name      String
-  phone     String
-  message   String
-  status    String   @default("NEW")
-  createdAt DateTime @default(now())
-  listing   Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  id              Int      @id @default(autoincrement())
+  listingId       Int
+  name            String
+  phone           String
+  message         String
+  source          String   @default("FORM")
+  status          String   @default("NEW")
+  firstResponseAt DateTime?
+  createdAt       DateTime @default(now())
+  listing         Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
 
   @@index([listingId, status, createdAt])
+  @@index([source, createdAt])
 }
 
 model Plan {
@@ -132,36 +146,36 @@ model Plan {
 }
 
 model Subscription {
-  id                        Int      @id @default(autoincrement())
-  userId                    Int
-  planId                    Int
-  status                    String   @default("ACTIVE")
-  billingCycle              String   @default("MONTHLY")
-  startedAt                 DateTime @default(now())
-  expiresAt                 DateTime?
-  paymentMethod             String   @default("MANUAL")
-  externalRef               String?  @unique
-  mercadoPagoPreapprovalId  String?
-  mercadoPagoPayerEmail     String?
-  user                      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  plan                      Plan     @relation(fields: [planId], references: [id], onDelete: Restrict)
-  payments                  Payment[]
+  id                       Int      @id @default(autoincrement())
+  userId                   Int
+  planId                   Int
+  status                   String   @default("ACTIVE")
+  billingCycle             String   @default("MONTHLY")
+  startedAt                DateTime @default(now())
+  expiresAt                DateTime?
+  paymentMethod            String   @default("MANUAL")
+  externalRef              String?  @unique
+  mercadoPagoPreapprovalId String?
+  mercadoPagoPayerEmail    String?
+  user                     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan                     Plan     @relation(fields: [planId], references: [id], onDelete: Restrict)
+  payments                 Payment[]
 
   @@index([userId, status, expiresAt])
 }
 
 model Payment {
-  id             Int      @id @default(autoincrement())
+  id             Int           @id @default(autoincrement())
   userId         Int
   subscriptionId Int?
   listingId      Int?
-  type           String   @default("PLAN")
-  status         String   @default("PENDING")
+  type           String        @default("PLAN")
+  status         String        @default("PENDING")
   amount         Float
-  currency       String   @default("BRL")
-  provider       String   @default("LOCAL")
-  providerRef    String?  @unique
-  externalRef    String   @unique
+  currency       String        @default("BRL")
+  provider       String        @default("LOCAL")
+  providerRef    String?       @unique
+  externalRef    String        @unique
   checkoutUrl    String?
   pixCode        String?
   pixQrBase64    String?
@@ -169,9 +183,9 @@ model Payment {
   durationDays   Int?
   paidAt         DateTime?
   expiresAt      DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   subscription   Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
   listing        Listing?      @relation(fields: [listingId], references: [id], onDelete: SetNull)
 
