@@ -51,15 +51,29 @@ function buildRecoveryCode() {
 
 const router = express.Router();
 
+function normalizeEmail(email = '') {
+  return String(email || '').trim().toLowerCase();
+}
+
+function validatePassword(password = '') {
+  return String(password || '').trim().length >= 6;
+}
+
 router.post('/register', async (req, res) => {
   try {
-    const { name, email, phone, password } = req.body;
+    const name = String(req.body.name || '').trim();
+    const email = normalizeEmail(req.body.email);
+    const phone = String(req.body.phone || '').trim();
+    const password = String(req.body.password || '');
     if (!name || !email || !phone || !password) {
       return res.status(400).json({ message: 'Preencha todos os campos obrigatórios.' });
     }
+    if (!validatePassword(password)) return res.status(400).json({ message: 'A senha precisa ter pelo menos 6 caracteres.' });
+
     const existingUser = await prisma.user.findUnique({ where: { email } });
     if (existingUser) return res.status(409).json({ message: 'E-mail já cadastrado.' });
 
+    if (!validatePassword(password)) return res.status(400).json({ message: 'A nova senha precisa ter pelo menos 6 caracteres.' });
     const passwordHash = await bcrypt.hash(password, 10);
     const user = await prisma.user.create({ data: { name, email, phone, passwordHash, role: 'USER' } });
     await ensureDefaultPlanSubscription(user.id, user.email);
@@ -72,7 +86,8 @@ router.post('/register', async (req, res) => {
 
 router.post('/login', async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const email = normalizeEmail(req.body.email);
+    const password = String(req.body.password || '');
     const user = await prisma.user.findUnique({ where: { email } });
     if (!user) return res.status(401).json({ message: 'Credenciais inválidas.' });
 
@@ -88,7 +103,7 @@ router.post('/login', async (req, res) => {
 
 router.post('/forgot-password', async (req, res) => {
   try {
-    const { email } = req.body;
+    const email = normalizeEmail(req.body.email);
     if (!email) return res.status(400).json({ message: 'Informe o e-mail cadastrado.' });
     await cleanupExpiredPasswordTokens();
     const user = await prisma.user.findUnique({ where: { email } });
@@ -125,7 +140,9 @@ router.post('/forgot-password', async (req, res) => {
 
 router.post('/reset-password', async (req, res) => {
   try {
-    const { email, code, password } = req.body;
+    const email = normalizeEmail(req.body.email);
+    const code = String(req.body.code || '').trim();
+    const password = String(req.body.password || '');
     if (!email || !code || !password) return res.status(400).json({ message: 'E-mail, código e nova senha são obrigatórios.' });
     await cleanupExpiredPasswordTokens();
 
@@ -149,15 +166,59 @@ router.post('/reset-password', async (req, res) => {
 
 router.post('/change-password', authRequired, async (req, res) => {
   try {
-    const { currentPassword, newPassword } = req.body;
+    const currentPassword = String(req.body.currentPassword || '');
+    const newPassword = String(req.body.newPassword || '');
     if (!currentPassword || !newPassword) return res.status(400).json({ message: 'Informe a senha atual e a nova senha.' });
     const passwordOk = await bcrypt.compare(currentPassword, req.user.passwordHash);
     if (!passwordOk) return res.status(400).json({ message: 'Senha atual inválida.' });
+    if (!validatePassword(newPassword)) return res.status(400).json({ message: 'A nova senha precisa ter pelo menos 6 caracteres.' });
     const passwordHash = await bcrypt.hash(newPassword, 10);
     await prisma.user.update({ where: { id: req.user.id }, data: { passwordHash } });
     return res.json({ message: 'Senha alterada com sucesso.' });
   } catch (error) {
     return res.status(500).json({ message: 'Não foi possível alterar a senha.' });
+  }
+});
+
+
+router.put('/me', authRequired, async (req, res) => {
+  try {
+    const name = String(req.body.name || '').trim();
+    const email = normalizeEmail(req.body.email);
+    const phone = String(req.body.phone || '').trim();
+    const companyName = String(req.body.companyName || '').trim() || null;
+
+    if (!name || !email || !phone) {
+      return res.status(400).json({ message: 'Nome, e-mail e telefone são obrigatórios.' });
+    }
+
+    const existingUser = await prisma.user.findFirst({
+      where: { email, id: { not: req.user.id } },
+      select: { id: true }
+    });
+    if (existingUser) return res.status(409).json({ message: 'Este e-mail já está em uso.' });
+
+    const updatedUser = await prisma.user.update({
+      where: { id: req.user.id },
+      data: { name, email, phone, companyName },
+    });
+
+    const favoriteCount = await prisma.favorite.count({ where: { userId: req.user.id } });
+    const listingCount = await prisma.listing.count({ where: { userId: req.user.id } });
+    const activeSubscription = await ensureDefaultPlanSubscription(req.user.id, updatedUser.email);
+
+    return res.json({
+      id: updatedUser.id,
+      name: updatedUser.name,
+      email: updatedUser.email,
+      phone: updatedUser.phone,
+      role: updatedUser.role,
+      companyName: updatedUser.companyName,
+      subscription: activeSubscription,
+      metrics: updatedUser.role === 'ADMIN' ? { favoriteCount, listingCount } : { favoriteCount }
+    });
+  } catch (error) {
+    return res.status(500).json({ message: 'Não foi possível atualizar seus dados.' });
   }
 });
 

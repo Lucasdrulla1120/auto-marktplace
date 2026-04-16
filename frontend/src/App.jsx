@@ -144,6 +144,10 @@ const storeProfileInitial = {
   storeCity: '', storeNeighborhood: '', storeWhatsapp: '', storeInstagram: '', storeWebsite: '', storeIsActive: true
 };
 
+const accountProfileInitial = {
+  name: '', email: '', phone: '', companyName: ''
+};
+
 async function api(path, options = {}, token = '') {
   const headers = {
     'Content-Type': 'application/json',
@@ -273,9 +277,23 @@ function Hero({ listingsCount, onOpenAuth, setCurrentView }) {
 
 function AuthPanel({ onAuthSuccess }) {
   const [mode, setMode] = useState('login');
-  const [form, setForm] = useState({ name: '', email: '', phone: '', password: '', resetPassword: '', resetPasswordConfirm: '', code: '' });
+  const [form, setForm] = useState({ name: '', email: '', phone: '', password: '', confirmPassword: '', resetPassword: '', resetPasswordConfirm: '', code: '' });
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
+
+  const authModeMeta = {
+    login: { title: 'Entre na sua conta', subtitle: 'Acesse seu painel, publique anúncios e responda clientes da sua região.' },
+    register: { title: 'Crie sua conta', subtitle: 'Cadastre-se com aparência mais profissional e comece a vender com mais confiança.' },
+    forgot: { title: 'Recuperar acesso', subtitle: 'Informe seu e-mail para receber um código de recuperação.' },
+    reset: { title: 'Definir nova senha', subtitle: 'Digite o código recebido e crie uma nova senha para continuar.' },
+  };
+
+  const updateField = (key, value) => setForm((prev) => ({ ...prev, [key]: value }));
+
+  const switchMode = (nextMode) => {
+    setMode(nextMode);
+    setMessage('');
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -283,18 +301,21 @@ function AuthPanel({ onAuthSuccess }) {
     setMessage('');
     try {
       if (mode === 'register') {
-        await api('/auth/register', { method: 'POST', body: JSON.stringify(form) });
-        setMode('login');
+        if (form.password.length < 6) throw new Error('Use uma senha com pelo menos 6 caracteres.');
+        if (form.password !== form.confirmPassword) throw new Error('As senhas não conferem.');
+        await api('/auth/register', { method: 'POST', body: JSON.stringify({ name: form.name, email: form.email, phone: form.phone, password: form.password }) });
+        switchMode('login');
         setMessage('Cadastro concluído. Agora faça o login.');
       } else if (mode === 'forgot') {
         const data = await api('/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email: form.email }) });
         setMode('reset');
         setMessage(data.message || 'Se o e-mail existir, enviamos um código de recuperação.');
       } else if (mode === 'reset') {
+        if (form.resetPassword.length < 6) throw new Error('Use uma senha com pelo menos 6 caracteres.');
         if (form.resetPassword !== form.resetPasswordConfirm) throw new Error('As senhas não conferem.');
         const data = await api('/auth/reset-password', { method: 'POST', body: JSON.stringify({ email: form.email, code: form.code, password: form.resetPassword }) });
-        setMode('login');
-        setForm({ ...form, password: '', resetPassword: '', resetPasswordConfirm: '', code: '' });
+        switchMode('login');
+        setForm((prev) => ({ ...prev, password: '', confirmPassword: '', resetPassword: '', resetPasswordConfirm: '', code: '' }));
         setMessage(data.message || 'Senha atualizada com sucesso. Faça o login.');
       } else {
         const data = await api('/auth/login', { method: 'POST', body: JSON.stringify({ email: form.email, password: form.password }) });
@@ -307,25 +328,76 @@ function AuthPanel({ onAuthSuccess }) {
     }
   };
 
+  const meta = authModeMeta[mode] || authModeMeta.login;
+
   return (
-    <section className="card auth-card">
-      <div className="tabs">
-        <button className={mode === 'login' ? 'active' : ''} onClick={() => setMode('login')}>Login</button>
-        <button className={mode === 'register' ? 'active' : ''} onClick={() => setMode('register')}>Cadastro</button>
-        <button className={mode === 'forgot' ? 'active' : ''} onClick={() => setMode('forgot')}>Recuperar senha</button>
+    <section className="auth-shell">
+      <div className="auth-showcase card">
+        <span className="eyebrow">Acesso profissional</span>
+        <h2>{MARKETPLACE_NAME}</h2>
+        <p>{MARKETPLACE_TAGLINE}</p>
+        <div className="auth-benefits">
+          <div><strong>Mais confiança</strong><span>Login e cadastro com visual mais profissional para o cliente levar seu negócio a sério.</span></div>
+          <div><strong>Mais conversão</strong><span>Anuncie, receba contatos no WhatsApp e mantenha sua apresentação mais organizada.</span></div>
+          <div><strong>Mais controle</strong><span>Edite seus dados pessoais, empresa, loja e senha no mesmo painel.</span></div>
+        </div>
       </div>
-      <form onSubmit={handleSubmit} className="grid-form">
-        {mode === 'register' && <input placeholder="Nome" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />}
-        {mode === 'register' && <input placeholder="Telefone / WhatsApp" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />}
-        {(mode === 'login' || mode === 'register' || mode === 'forgot') && <input placeholder="E-mail" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />}
-        {mode === 'login' && <input placeholder="Senha" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />}
-        {mode === 'reset' && <input placeholder="Código recebido por e-mail" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} />}
-        {mode === 'reset' && <input placeholder="Nova senha" type="password" value={form.resetPassword} onChange={(e) => setForm({ ...form, resetPassword: e.target.value })} />}
-        {mode === 'reset' && <input placeholder="Confirmar nova senha" type="password" value={form.resetPasswordConfirm} onChange={(e) => setForm({ ...form, resetPasswordConfirm: e.target.value })} />}
-        <button type="submit" disabled={loading}>{loading ? 'Aguarde...' : mode === 'login' ? 'Entrar' : mode === 'register' ? 'Cadastrar' : mode === 'forgot' ? 'Enviar código' : 'Redefinir senha'}</button>
-      </form>
-      {mode === 'login' && <button className="link-button" onClick={() => setMode('forgot')}>Esqueci minha senha</button>}
-      {message && <p className="message">{message}</p>}
+
+      <section className="card auth-card auth-card-pro">
+        <div className="auth-card-header">
+          <span className="eyebrow">Conta</span>
+          <h2>{meta.title}</h2>
+          <p>{meta.subtitle}</p>
+        </div>
+
+        <div className="tabs auth-tabs">
+          <button type="button" className={mode === 'login' ? 'active' : ''} onClick={() => switchMode('login')}>Entrar</button>
+          <button type="button" className={mode === 'register' ? 'active' : ''} onClick={() => switchMode('register')}>Criar conta</button>
+          <button type="button" className={mode === 'forgot' || mode === 'reset' ? 'active' : ''} onClick={() => switchMode('forgot')}>Recuperar</button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="grid-form">
+          {mode === 'register' && (
+            <div className="grid two">
+              <label className="field-group"><span>Nome completo</span><input placeholder="Seu nome" value={form.name} onChange={(e) => updateField('name', e.target.value)} /></label>
+              <label className="field-group"><span>WhatsApp</span><input placeholder="(00) 00000-0000" value={form.phone} onChange={(e) => updateField('phone', e.target.value)} /></label>
+            </div>
+          )}
+
+          {(mode === 'login' || mode === 'register' || mode === 'forgot' || mode === 'reset') && (
+            <label className="field-group"><span>E-mail</span><input placeholder="voce@exemplo.com" type="email" value={form.email} onChange={(e) => updateField('email', e.target.value)} /></label>
+          )}
+
+          {mode === 'login' && <label className="field-group"><span>Senha</span><input placeholder="Digite sua senha" type="password" value={form.password} onChange={(e) => updateField('password', e.target.value)} /></label>}
+
+          {mode === 'register' && (
+            <div className="grid two">
+              <label className="field-group"><span>Senha</span><input placeholder="Mínimo 6 caracteres" type="password" value={form.password} onChange={(e) => updateField('password', e.target.value)} /></label>
+              <label className="field-group"><span>Confirmar senha</span><input placeholder="Repita a senha" type="password" value={form.confirmPassword} onChange={(e) => updateField('confirmPassword', e.target.value)} /></label>
+            </div>
+          )}
+
+          {mode === 'reset' && (
+            <>
+              <label className="field-group"><span>Código de recuperação</span><input placeholder="Código recebido por e-mail" value={form.code} onChange={(e) => updateField('code', e.target.value)} /></label>
+              <div className="grid two">
+                <label className="field-group"><span>Nova senha</span><input placeholder="Mínimo 6 caracteres" type="password" value={form.resetPassword} onChange={(e) => updateField('resetPassword', e.target.value)} /></label>
+                <label className="field-group"><span>Confirmar nova senha</span><input placeholder="Repita a nova senha" type="password" value={form.resetPasswordConfirm} onChange={(e) => updateField('resetPasswordConfirm', e.target.value)} /></label>
+              </div>
+            </>
+          )}
+
+          <button type="submit" disabled={loading}>{loading ? 'Processando...' : mode === 'login' ? 'Entrar agora' : mode === 'register' ? 'Criar minha conta' : mode === 'forgot' ? 'Enviar código' : 'Salvar nova senha'}</button>
+        </form>
+
+        <div className="auth-footer-actions">
+          {mode === 'login' && <button type="button" className="link-button" onClick={() => switchMode('forgot')}>Esqueci minha senha</button>}
+          {mode === 'forgot' && <button type="button" className="link-button" onClick={() => switchMode('login')}>Voltar para login</button>}
+          {mode === 'reset' && <button type="button" className="link-button" onClick={() => switchMode('forgot')}>Solicitar outro código</button>}
+        </div>
+
+        {message && <p className="message">{message}</p>}
+      </section>
     </section>
   );
 }
@@ -769,7 +841,7 @@ function ListingForm({ auth, editing, onSaved, onCancel }) {
   );
 }
 
-function Dashboard({ auth, listings, favorites, leads, subscription, plans, payments, checkoutState, paymentConfig, myStore, onSaveStore, onRefresh, onEdit, onOpen, onDelete, onToggleFavorite, onLeadStatusChange, onSubscribe, onFeatureListing, onRefreshPayment, onOpenPlans, onOpenStore, onChangePassword }) {
+function Dashboard({ auth, listings, favorites, leads, subscription, plans, payments, checkoutState, paymentConfig, myStore, onSaveStore, onSaveAccount, onRefresh, onEdit, onOpen, onDelete, onToggleFavorite, onLeadStatusChange, onSubscribe, onFeatureListing, onRefreshPayment, onOpenPlans, onOpenStore, onChangePassword }) {
   const upgradePlans = getUpgradePlans(plans, subscription);
   const isParticular = getCurrentPlanSlug(subscription) === 'particular' || !subscription;
   const canManageStore = ['lojista', 'premium'].includes(getCurrentPlanSlug(subscription));
@@ -930,6 +1002,16 @@ function Dashboard({ auth, listings, favorites, leads, subscription, plans, paym
       <section className="card">
         <div className="section-title">
           <div>
+            <h2>Minhas informações</h2>
+            <p>Edite seus dados pessoais para deixar sua conta mais profissional e atualizada.</p>
+          </div>
+        </div>
+        <AccountProfileCard auth={auth} onSubmit={onSaveAccount} />
+      </section>
+
+      <section className="card">
+        <div className="section-title">
+          <div>
             <h2>Segurança da conta</h2>
             <p>Altere sua senha sempre que precisar, com validação da senha atual.</p>
           </div>
@@ -962,6 +1044,54 @@ function Dashboard({ auth, listings, favorites, leads, subscription, plans, paym
         </div>
       </section>
     </div>
+  );
+}
+
+
+function AccountProfileCard({ auth, onSubmit }) {
+  const [form, setForm] = useState(accountProfileInitial);
+  const [message, setMessage] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setForm({
+      name: auth.user?.name || '',
+      email: auth.user?.email || '',
+      phone: auth.user?.phone || '',
+      companyName: auth.user?.companyName || '',
+    });
+  }, [auth.user]);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    setMessage('');
+    try {
+      const response = await onSubmit(form);
+      setMessage(response?.message || 'Suas informações foram atualizadas com sucesso.');
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form className="profile-form" onSubmit={handleSubmit}>
+      <div className="grid two">
+        <label className="field-group"><span>Nome</span><input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
+        <label className="field-group"><span>Telefone / WhatsApp</span><input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></label>
+      </div>
+      <div className="grid two">
+        <label className="field-group"><span>E-mail</span><input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></label>
+        <label className="field-group"><span>Empresa / loja (opcional)</span><input value={form.companyName} onChange={(e) => setForm({ ...form, companyName: e.target.value })} /></label>
+      </div>
+      <div className="actions-row wrap profile-form-actions">
+        <button type="submit" disabled={saving}>{saving ? 'Salvando...' : 'Salvar minhas informações'}</button>
+        <span className="subtle">Esses dados serão usados no seu painel e no contato com compradores.</span>
+      </div>
+      {message && <p className="message">{message}</p>}
+    </form>
   );
 }
 
@@ -1409,6 +1539,24 @@ export default function App() {
     }
   };
 
+  const refreshCurrentUser = async () => {
+    if (!auth.token) return null;
+    const currentUser = await api('/auth/me', {}, auth.token);
+    setAuth((prev) => ({
+      ...prev,
+      user: {
+        ...prev.user,
+        id: currentUser.id,
+        name: currentUser.name,
+        email: currentUser.email,
+        phone: currentUser.phone,
+        role: currentUser.role,
+        companyName: currentUser.companyName || '',
+      }
+    }));
+    return currentUser;
+  };
+
   const refreshPrivateData = async () => {
     if (!auth.user) return;
     await Promise.all([
@@ -1501,10 +1649,28 @@ export default function App() {
     };
   }, [checkoutState?.paymentId, auth.token]);
 
-  const handleAuthSuccess = (data) => {
+  const handleAuthSuccess = async (data) => {
     setAuth(data);
     setCurrentView(data.user?.role === 'ADMIN' ? 'admin' : 'dashboard');
     setMessage('');
+    try {
+      await api('/auth/me', {}, data.token).then((currentUser) => {
+        setAuth((prev) => ({
+          ...prev,
+          user: {
+            ...prev.user,
+            id: currentUser.id,
+            name: currentUser.name,
+            email: currentUser.email,
+            phone: currentUser.phone,
+            role: currentUser.role,
+            companyName: currentUser.companyName || '',
+          }
+        }));
+      });
+    } catch (error) {
+      setMessage(error.message);
+    }
   };
 
   const logout = () => {
@@ -1648,6 +1814,30 @@ export default function App() {
     }
   };
 
+  const saveMyAccount = async (payload) => {
+    try {
+      const updated = await api('/auth/me', { method: 'PUT', body: JSON.stringify(payload) }, auth.token);
+      setAuth((prev) => ({
+        ...prev,
+        user: {
+          ...prev.user,
+          id: updated.id,
+          name: updated.name,
+          email: updated.email,
+          phone: updated.phone,
+          role: updated.role,
+          companyName: updated.companyName || '',
+        }
+      }));
+      setMessage('Seus dados foram atualizados com sucesso.');
+      await Promise.all([fetchListings(), fetchMyListings(), fetchStores(), fetchMyStore(), fetchSubscription()]);
+      return { message: 'Seus dados foram atualizados com sucesso.' };
+    } catch (error) {
+      setMessage(error.message);
+      throw error;
+    }
+  };
+
   const saveMyStore = async (payload) => {
     try {
       await api('/stores/me', { method: 'PUT', body: JSON.stringify(payload) }, auth.token);
@@ -1718,6 +1908,7 @@ export default function App() {
               paymentConfig={paymentConfig}
               myStore={myStore}
               onSaveStore={saveMyStore}
+              onSaveAccount={saveMyAccount}
               onRefresh={refreshAll}
               onEdit={(listing) => setEditingListing(listing)}
               onOpen={openListing}

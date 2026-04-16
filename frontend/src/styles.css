@@ -188,3 +188,63 @@ textarea { width: 100%; border: 1px solid #d8deef; border-radius: 12px; padding:
 .chat-compose { display:grid; gap:10px; }
 .chat-empty { display:grid; place-items:center; text-align:center; color:#5f6d8d; min-height:260px; }
 @media (max-width: 900px) { .chat-layout { grid-template-columns: 1fr; } .chat-pane-head { flex-direction:column; } .chat-bubble { max-width:100%; } }
+
+.link-button {
+  background: transparent;
+  color: #1f4fd7;
+  padding: 0;
+  border-radius: 0;
+}
+
+.auth-shell {
+  display: grid;
+  grid-template-columns: 1.05fr .95fr;
+  gap: 22px;
+  align-items: stretch;
+  margin: 36px 0;
+}
+
+.auth-showcase {
+  background: linear-gradient(135deg, #17305c 0%, #204ba7 55%, #2c67df 100%);
+  color: white;
+  min-height: 100%;
+}
+
+.auth-showcase h2 {
+  margin: 8px 0 10px;
+  font-size: 36px;
+}
+
+.auth-showcase p {
+  color: rgba(255,255,255,.86);
+}
+
+.auth-benefits {
+  display: grid;
+  gap: 14px;
+  margin-top: 22px;
+}
+
+.auth-benefits > div {
+  background: rgba(255,255,255,.1);
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: 18px;
+  padding: 16px;
+  display: grid;
+  gap: 6px;
+}
+
+.auth-benefits strong { font-size: 18px; }
+.auth-benefits span { color: rgba(255,255,255,.82); }
+.auth-card-pro { max-width: none; margin: 0; }
+.auth-card-header h2 { margin: 8px 0 8px; }
+.auth-card-header p { margin: 0 0 18px; color: #64718e; }
+.auth-tabs { margin-bottom: 22px; }
+.auth-tabs button { flex: 1; }
+.auth-footer-actions { margin-top: 14px; }
+.profile-form { display: grid; gap: 14px; }
+.profile-form-actions { align-items: center; }
+
+@media (max-width: 900px) {
+  .auth-shell { grid-template-columns: 1fr; }
+}
