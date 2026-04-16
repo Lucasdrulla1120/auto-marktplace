@@ -10,7 +10,7 @@ const {
   normalizePage,
   normalizePerPage,
 } = require('../utils/helpers');
-const { runMarketplaceMaintenance, getListingLimitForUser } = require('../utils/marketplaceLifecycle');
+const { addDays, runMarketplaceMaintenance, getListingLimitForUser, getCurrentSubscription, getListingDurationForSubscription } = require('../utils/marketplaceLifecycle');
 
 const router = express.Router();
 
@@ -257,12 +257,21 @@ router.post('/', authRequired, async (req, res) => {
     if (validationError) return res.status(400).json({ message: validationError });
 
     const { listingLimit } = await getListingLimitForUser(req.user.id);
-    const activeListings = await prisma.listing.count({ where: { userId: req.user.id, status: { not: 'REJECTED' } } });
+    const activeListings = await prisma.listing.count({ where: { userId: req.user.id, status: { in: ['PENDING', 'APPROVED'] } } });
     if (activeListings >= listingLimit) return res.status(400).json({ message: `Seu plano atual permite até ${listingLimit} anúncio(s) ativo(s).` });
 
     const normalizedImages = choosePrimary((req.body.images || []).map((img) => ({ imageUrl: String(img.imageUrl || '').trim(), isPrimary: !!img.isPrimary })));
+    const subscription = await getCurrentSubscription(req.user.id);
+    const listingDurationDays = getListingDurationForSubscription(subscription);
     const listing = await prisma.listing.create({
-      data: { userId: req.user.id, ...data, phone: normalizePhone(data.phone) || data.phone, status: req.user.role === 'ADMIN' ? 'APPROVED' : 'PENDING', images: { create: normalizedImages } },
+      data: {
+        userId: req.user.id,
+        ...data,
+        phone: normalizePhone(data.phone) || data.phone,
+        status: req.user.role === 'ADMIN' ? 'APPROVED' : 'PENDING',
+        expiresAt: addDays(new Date(), listingDurationDays),
+        images: { create: normalizedImages },
+      },
       include: includeConfig(req.user.id),
     });
     return res.status(201).json(serializeListing(listing));
@@ -291,7 +300,7 @@ router.put('/:id', authRequired, async (req, res) => {
 
     const updated = await prisma.$transaction(async (tx) => {
       await tx.listingImage.deleteMany({ where: { listingId } });
-      await tx.listing.update({ where: { id: listingId }, data: { ...data, phone: normalizePhone(data.phone) || data.phone, status: nextStatus } });
+      await tx.listing.update({ where: { id: listingId }, data: { ...data, phone: normalizePhone(data.phone) || data.phone, status: nextStatus, expiresAt: existing.expiresAt || addDays(new Date(), 30) } });
       await tx.listingImage.createMany({ data: normalizedImages.map((img, index) => ({ ...img, listingId, sortOrder: index })) });
       return tx.listing.findUnique({ where: { id: listingId }, include: includeConfig(req.user.id) });
     });
@@ -299,6 +308,36 @@ router.put('/:id', authRequired, async (req, res) => {
     return res.json(serializeListing(updated));
   } catch {
     return res.status(500).json({ message: 'Erro ao atualizar anúncio.' });
+  }
+});
+
+router.post('/:id/renew', authRequired, async (req, res) => {
+  try {
+    await runMarketplaceMaintenance();
+    const listingId = Number(req.params.id);
+    const existing = await prisma.listing.findUnique({ where: { id: listingId } });
+    if (!existing) return res.status(404).json({ message: 'Anúncio não encontrado.' });
+    if (existing.userId !== req.user.id && req.user.role !== 'ADMIN') return res.status(403).json({ message: 'Sem permissão para renovar este anúncio.' });
+
+    const subscription = await getCurrentSubscription(existing.userId);
+    const durationDays = getListingDurationForSubscription(subscription);
+    const baseDate = existing.expiresAt && existing.expiresAt > new Date() ? existing.expiresAt : new Date();
+
+    const renewed = await prisma.listing.update({
+      where: { id: listingId },
+      data: {
+        expiresAt: addDays(baseDate, durationDays),
+        status: existing.status === 'REJECTED' ? (req.user.role === 'ADMIN' ? 'APPROVED' : 'PENDING') : (existing.status === 'EXPIRED' ? 'APPROVED' : existing.status),
+      },
+      include: includeConfig(req.user.id),
+    });
+
+    return res.json({
+      message: `Anúncio renovado por ${durationDays} dias.`,
+      listing: serializeListing(renewed),
+    });
+  } catch {
+    return res.status(500).json({ message: 'Erro ao renovar anúncio.' });
   }
 });
 

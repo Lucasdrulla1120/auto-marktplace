@@ -130,6 +130,7 @@ async function main() {
       status: 'APPROVED',
       isFeatured: true,
       featuredUntil: new Date(Date.now() + 1000 * 60 * 60 * 24 * 15),
+      expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30),
       images: { create: [
         { imageUrl: 'https://images.unsplash.com/photo-1553440569-bcc63803a83d?auto=format&fit=crop&w=900&q=80', isPrimary: true, sortOrder: 0 },
         { imageUrl: 'https://images.unsplash.com/photo-1494976388531-d1058494cdd8?auto=format&fit=crop&w=900&q=80', isPrimary: false, sortOrder: 1 }
@@ -152,6 +153,7 @@ async function main() {
       phone: seller.phone,
       status: 'APPROVED',
       isFeatured: false,
+      expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30),
       images: { create: [
         { imageUrl: 'https://images.unsplash.com/photo-1503376780353-7e6692767b70?auto=format&fit=crop&w=900&q=80', isPrimary: true, sortOrder: 0 }
       ] }
@@ -174,6 +176,7 @@ async function main() {
       status: 'APPROVED',
       isFeatured: true,
       featuredUntil: new Date(Date.now() + 1000 * 60 * 60 * 24 * 15),
+      expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30),
       images: { create: [
         { imageUrl: 'https://images.unsplash.com/photo-1511919884226-fd3cad34687c?auto=format&fit=crop&w=900&q=80', isPrimary: true, sortOrder: 0 }
       ] }

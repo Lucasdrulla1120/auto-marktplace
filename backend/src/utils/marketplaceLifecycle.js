@@ -10,6 +10,13 @@ function addDays(baseDate = new Date(), days = 30) {
   return date;
 }
 
+function getListingDurationForSubscription(subscription) {
+  const slug = subscription?.plan?.slug || 'particular';
+  if (slug === 'premium') return 60;
+  if (slug === 'lojista') return 45;
+  return 30;
+}
+
 async function runMarketplaceMaintenance(force = false) {
   if (!force && Date.now() - lastMaintenanceAt < MAINTENANCE_WINDOW_MS) return;
   if (currentRun) return currentRun;
@@ -20,6 +27,14 @@ async function runMarketplaceMaintenance(force = false) {
     await prisma.listing.updateMany({
       where: { isFeatured: true, featuredUntil: { lt: now } },
       data: { isFeatured: false, featuredUntil: null },
+    }).catch(() => null);
+
+    await prisma.listing.updateMany({
+      where: {
+        status: { in: ['APPROVED', 'PENDING'] },
+        expiresAt: { lt: now },
+      },
+      data: { status: 'EXPIRED', isFeatured: false, featuredUntil: null },
     }).catch(() => null);
 
     await prisma.payment.updateMany({
@@ -63,6 +78,7 @@ async function getListingLimitForUser(userId) {
 
 module.exports = {
   addDays,
+  getListingDurationForSubscription,
   runMarketplaceMaintenance,
   getCurrentSubscription,
   getListingLimitForUser,

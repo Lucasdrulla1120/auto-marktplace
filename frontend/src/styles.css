@@ -267,3 +267,46 @@ textarea { width: 100%; border: 1px solid #d8deef; border-radius: 12px; padding:
     gap: 8px;
   }
 }
+
+.premium-highlight {
+  border: 1px solid #d6e3ff;
+  background: linear-gradient(180deg, #ffffff, #eef5ff);
+}
+.premium-highlight ul {
+  margin: 0;
+  padding-left: 18px;
+  color: #56657f;
+}
+.premium-card {
+  border: 1px solid #d6e3ff;
+  box-shadow: 0 18px 40px rgba(37, 84, 212, 0.12);
+}
+.status-pill.verified {
+  background: #0f766e;
+  color: #fff;
+}
+.listing-expiration {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  color: #475569;
+}
+.listing-expiration.warning {
+  background: #fff7ed;
+  border-color: #fdba74;
+  color: #9a3412;
+}
+.plan-card.current-plan {
+  border-width: 2px;
+}
+.plan-card.recommended,
+.plan-card.current-plan {
+  box-shadow: 0 18px 40px rgba(37, 84, 212, 0.12);
+}
+.store-card,
+.store-detail-hero {
+  border: 1px solid #dbe6ff;
+}
