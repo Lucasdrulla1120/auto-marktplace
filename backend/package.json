@@ -9,11 +9,10 @@
     "prisma:generate": "prisma generate",
     "prisma:push": "prisma db push",
     "seed": "node prisma/seed.js",
-    "backfill:slugs": "node prisma/backfill-slugs.js",
     "setup": "npm run prisma:generate && npm run prisma:push && npm run seed",
-    "deploy:prepare": "npm run prisma:generate && npm run prisma:push && npm run backfill:slugs",
+    "deploy:prepare": "npm run prisma:generate && npm run prisma:push && npm run seed",
     "build": "node -e \"console.log('backend build ok')\"",
-    "render:prepare": "prisma generate && prisma db push && node prisma/backfill-slugs.js"
+    "render:prepare": "prisma generate && prisma db push && node prisma/seed.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

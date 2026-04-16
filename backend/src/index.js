@@ -2,7 +2,6 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const prisma = require('./utils/prisma');
-const { securityHeaders } = require('./middleware/security');
 
 const authRoutes = require('./routes/auth');
 const listingRoutes = require('./routes/listings');
@@ -13,7 +12,6 @@ const storesRoutes = require('./routes/stores');
 
 const app = express();
 const PORT = Number(process.env.PORT || 4000);
-const ENABLE_REQUEST_LOGS = String(process.env.ENABLE_REQUEST_LOGS || 'false') === 'true';
 
 function buildCorsOptions() {
   const rawOrigins = process.env.CORS_ORIGIN || process.env.CORS_ORIGINS || '*';
@@ -36,29 +34,17 @@ function buildCorsOptions() {
   };
 }
 
-app.set('trust proxy', 1);
-app.use(securityHeaders);
 app.use(cors(buildCorsOptions()));
 app.options('*', cors(buildCorsOptions()));
 app.use(express.json({ limit: process.env.REQUEST_BODY_LIMIT || '15mb' }));
 app.use(express.urlencoded({ extended: true, limit: process.env.REQUEST_BODY_LIMIT || '15mb' }));
-
-if (ENABLE_REQUEST_LOGS) {
-  app.use((req, res, next) => {
-    const startedAt = Date.now();
-    res.on('finish', () => {
-      console.log(`${req.method} ${req.originalUrl} -> ${res.statusCode} (${Date.now() - startedAt}ms)`);
-    });
-    next();
-  });
-}
 
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
     message: 'API online',
     timestamp: new Date().toISOString(),
-    version: 'v5.0.0-regional-sales-ready',
+    version: 'v4.5.0-local-marketplace-regional-upgrade',
   });
 });
 
