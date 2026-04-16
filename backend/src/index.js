@@ -36,11 +36,16 @@ function buildCorsOptions() {
 
 app.use(cors(buildCorsOptions()));
 app.options('*', cors(buildCorsOptions()));
-app.use(express.json({ limit: '25mb' }));
-app.use(express.urlencoded({ extended: true, limit: '25mb' }));
+app.use(express.json({ limit: process.env.REQUEST_BODY_LIMIT || '15mb' }));
+app.use(express.urlencoded({ extended: true, limit: process.env.REQUEST_BODY_LIMIT || '15mb' }));
 
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', message: 'API online', timestamp: new Date().toISOString(), version: 'v3.9.1-local-marketplace-whatsapp-reset-ready' });
+  res.json({
+    status: 'ok',
+    message: 'API online',
+    timestamp: new Date().toISOString(),
+    version: 'v4.5.0-local-marketplace-regional-upgrade',
+  });
 });
 
 app.use('/api/auth', authRoutes);
@@ -58,7 +63,6 @@ app.use((error, req, res, next) => {
   if (error?.message?.startsWith('CORS bloqueado')) {
     return res.status(403).json({ message: error.message });
   }
-
   console.error('Erro não tratado:', error);
   return res.status(500).json({ message: 'Erro interno do servidor.' });
 });

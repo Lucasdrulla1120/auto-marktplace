@@ -4,17 +4,26 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const prisma = require('../utils/prisma');
 const { authRequired } = require('../middleware/auth');
+const { getCurrentSubscription, runMarketplaceMaintenance } = require('../utils/marketplaceLifecycle');
 
 async function ensureDefaultPlanSubscription(userId, email) {
+  await runMarketplaceMaintenance();
+  const current = await getCurrentSubscription(userId);
+  if (current) return current;
+
+  const pending = await prisma.subscription.findFirst({
+    where: {
+      userId,
+      status: { in: ['PENDING_PAYMENT', 'ACTIVATING'] },
+      OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+    },
+    include: { plan: true },
+    orderBy: { startedAt: 'desc' },
+  });
+  if (pending) return pending;
+
   const plan = await prisma.plan.findUnique({ where: { slug: 'particular' } }).catch(() => null);
   if (!plan) return null;
-
-  const existing = await prisma.subscription.findFirst({
-    where: { userId, status: { in: ['ACTIVE', 'ACTIVATING', 'PENDING_PAYMENT', 'PAST_DUE'] } },
-    include: { plan: true },
-    orderBy: { startedAt: 'desc' }
-  });
-  if (existing) return existing;
 
   return prisma.subscription.create({
     data: {

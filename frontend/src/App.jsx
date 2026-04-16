@@ -1,23 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 
 const API_URL = (import.meta.env.VITE_API_URL || 'http://127.0.0.1:4000/api').replace(/\/$/, '');
+const MARKETPLACE_NAME = import.meta.env.VITE_MARKETPLACE_NAME || 'Local Marktplace';
+const MARKETPLACE_CITY = import.meta.env.VITE_MARKETPLACE_CITY || 'sua cidade';
+const MARKETPLACE_TAGLINE = import.meta.env.VITE_MARKETPLACE_TAGLINE || 'Compre e anuncie veículos com uma experiência local mais direta e comercial.';
 const emptyAuth = { token: '', user: null };
-const CACHE_KEYS = { listings: 'lm-cache-listings', plans: 'lm-cache-plans', stores: 'lm-cache-stores' };
-
-function readCache(key, fallback = []) {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function writeCache(key, value) {
-  try {
-    localStorage.setItem(key, JSON.stringify(value));
-  } catch {}
-}
 const VEHICLE_DATA = {
   Chevrolet: ['Agile', 'Astra', 'Blazer', 'Bolt', 'Camaro', 'Celta', 'Classic', 'Cobalt', 'Corsa', 'Cruze', 'Equinox', 'Joy', 'Kadett', 'Meriva', 'Montana', 'Onix', 'Onix Plus', 'Omega', 'Prisma', 'S10', 'Silverado', 'Sonic', 'Spin', 'Tracker', 'Trailblazer', 'Vectra', 'Zafira'],
   Citroen: ['Aircross', 'Basalt', 'Berlingo', 'C3', 'C3 Aircross', 'C4', 'C4 Cactus', 'C4 Lounge', 'C5', 'Jumpy'],
@@ -55,6 +42,27 @@ const listingInitial = {
   transmission: '', fuel: '', color: '', city: '', neighborhood: '', phone: '', images: []
 };
 
+const filterInitial = {
+  q: '',
+  brand: '',
+  model: '',
+  city: '',
+  neighborhood: '',
+  fuel: '',
+  transmission: '',
+  color: '',
+  minPrice: '',
+  maxPrice: '',
+  minYear: '',
+  maxYear: '',
+  minKm: '',
+  maxKm: '',
+  onlyWithPhoto: false,
+  sortBy: 'recent',
+  page: 1,
+  perPage: 12,
+};
+
 function currency(value) {
   return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(value || 0));
 }
@@ -63,9 +71,12 @@ function normalizePhone(value = '') {
   return String(value).replace(/\D/g, '');
 }
 
-function buildWhatsAppUrl(phone, title = '') {
+function buildWhatsAppUrl(phone, title = '', city = '') {
   const digits = normalizePhone(phone);
-  const text = encodeURIComponent('Olá vi seu anuncio no Local Marktplace e gostaria de mais informações !');
+  const parts = [`Olá! Vi o anúncio ${title ? `"${title}"` : 'do veículo'}`];
+  if (city) parts.push(`em ${city}`);
+  parts.push(`no ${MARKETPLACE_NAME} e quero mais informações.`);
+  const text = encodeURIComponent(parts.join(' '));
   return digits ? `https://wa.me/${digits}?text=${text}` : '#';
 }
 
@@ -133,80 +144,92 @@ const storeProfileInitial = {
   storeCity: '', storeNeighborhood: '', storeWhatsapp: '', storeInstagram: '', storeWebsite: '', storeIsActive: true
 };
 
-async function api(path, options = {}, token = '', config = {}) {
+async function api(path, options = {}, token = '') {
   const headers = {
     'Content-Type': 'application/json',
     ...(options.headers || {}),
   };
   if (token) headers.Authorization = `Bearer ${token}`;
-
-  const method = (options.method || 'GET').toUpperCase();
-  const retryable = method === 'GET' || config.retry === true;
-  const retries = config.retries ?? (retryable ? 2 : 0);
-  const timeoutMs = config.timeoutMs ?? 12000;
-
-  let lastError;
-  for (let attempt = 0; attempt <= retries; attempt += 1) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const response = await fetch(`${API_URL}${path}`, { ...options, headers, signal: controller.signal });
-      clearTimeout(timer);
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        const retryStatus = [408, 429, 500, 502, 503, 504].includes(response.status);
-        if (attempt < retries && retryStatus) {
-          await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
-          continue;
-        }
-        throw new Error(data.message || 'Erro na requisição.');
-      }
-      return data;
-    } catch (error) {
-      clearTimeout(timer);
-      lastError = error;
-      if (attempt < retries) {
-        await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
-        continue;
-      }
-    }
-  }
-  throw new Error(lastError?.name === 'AbortError' ? 'A requisição demorou demais. Tente novamente.' : (lastError?.message || 'Erro na requisição.'));
+  const response = await fetch(`${API_URL}${path}`, { ...options, headers });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.message || 'Erro na requisição.');
+  return data;
 }
 
 function getPrimaryImage(images = []) {
   return images.find((img) => img.isPrimary) || images[0] || null;
 }
 
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function loadImageElement(src) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+    image.src = src;
+  });
+}
+
+async function optimizeImage(file, { maxWidth = 1600, maxHeight = 1200, quality = 0.82 } = {}) {
+  const originalDataUrl = await fileToDataUrl(file);
+  if (!String(file.type || '').startsWith('image/') || /gif|svg/i.test(file.type || '')) {
+    return originalDataUrl;
+  }
+
+  const image = await loadImageElement(originalDataUrl);
+  const ratio = Math.min(1, maxWidth / image.width, maxHeight / image.height);
+  const width = Math.max(1, Math.round(image.width * ratio));
+  const height = Math.max(1, Math.round(image.height * ratio));
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(image, 0, 0, width, height);
+  return canvas.toDataURL('image/jpeg', quality);
+}
+
 function readFilesAsDataUrl(files) {
   return Promise.all(
-    Array.from(files).map((file) => new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve({ imageUrl: reader.result, fileName: file.name, isPrimary: false });
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
+    Array.from(files).map(async (file) => ({
+      imageUrl: await optimizeImage(file),
+      fileName: file.name,
+      isPrimary: false,
     }))
   );
 }
 
 async function reverseGeocode(latitude, longitude) {
+  const cacheKey = `marketplace-geocode-${Number(latitude).toFixed(3)}-${Number(longitude).toFixed(3)}`;
+  const cached = sessionStorage.getItem(cacheKey);
+  if (cached) return JSON.parse(cached);
+
   const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${latitude}&lon=${longitude}`;
-  const response = await fetch(url, { headers: { Accept: 'application/json' } });
+  const response = await fetch(url, { headers: { Accept: 'application/json', 'Accept-Language': 'pt-BR' } });
   if (!response.ok) throw new Error('Não foi possível consultar a localização.');
   const data = await response.json();
   const address = data.address || {};
-  return {
+  const location = {
     city: address.city || address.town || address.municipality || address.village || '',
     neighborhood: address.suburb || address.neighbourhood || address.city_district || address.county || '',
   };
+  sessionStorage.setItem(cacheKey, JSON.stringify(location));
+  return location;
 }
 
 function Header({ auth, onLogout, currentView, setCurrentView }) {
   return (
     <header className="topbar">
       <div>
-        <h1>Local Marktplace</h1>
-        <p>Compre e anuncie veículos com uma experiência local mais direta e comercial.</p>
+        <h1>{MARKETPLACE_NAME}</h1>
+        <p>{MARKETPLACE_TAGLINE}</p>
       </div>
       <nav className="topnav">
         <button className={currentView === 'home' ? 'active' : ''} onClick={() => setCurrentView('home')}>Anúncios</button>
@@ -228,10 +251,10 @@ function Hero({ listingsCount, onOpenAuth, setCurrentView }) {
   return (
     <section className="hero card">
       <div>
-        <span className="eyebrow">Classificados automotivos da sua região</span>
-        <h2>Compre e anuncie diretamente na sua cidade.</h2>
+        <span className="eyebrow">Classificados automotivos de {MARKETPLACE_CITY}</span>
+        <h2>Compre e anuncie diretamente em {MARKETPLACE_CITY}.</h2>
         <p>
-          Busca simples, fotos organizadas, contato direto por WhatsApp e uma experiência local mais objetiva para acelerar a negociação.
+          Busca avançada, fotos otimizadas automaticamente, moderação de anúncios e contato direto por WhatsApp para fechar negócio com mais confiança.
         </p>
         <div className="actions-row wrap">
           <button onClick={() => setCurrentView('dashboard')}>Publicar anúncio</button>
@@ -319,17 +342,17 @@ function VehicleFieldSelect({ label, value, onChange, options }) {
   );
 }
 
-function Filters({ filters, setFilters, onRefresh, total }) {
+function Filters({ filters, setFilters, onRefresh, total, meta }) {
   const modelOptions = filters.brand ? (VEHICLE_DATA[filters.brand] || []) : [];
-  const update = (key, value) => setFilters((prev) => ({ ...prev, [key]: value }));
-  const clearFilters = () => setFilters({ q: '', brand: '', model: '', sortBy: 'recent' });
+  const update = (key, value) => setFilters((prev) => ({ ...prev, [key]: value, page: key === 'page' ? value : 1 }));
+  const clearFilters = () => setFilters(filterInitial);
 
   return (
     <section className="card filters compact-filters">
       <div className="section-title compact">
         <div>
           <h2>Busque seu veículo</h2>
-          <p>{total} anúncio(s) encontrado(s).</p>
+          <p>{total} anúncio(s) encontrado(s). Página {meta?.page || 1} de {meta?.totalPages || 1}.</p>
         </div>
         <div className="actions-row wrap">
           <button className="ghost" onClick={clearFilters}>Limpar</button>
@@ -337,10 +360,25 @@ function Filters({ filters, setFilters, onRefresh, total }) {
         </div>
       </div>
       <div className="grid four">
-        <input placeholder="Pesquisar por veículo, marca ou cidade" value={filters.q} onChange={(e) => update('q', e.target.value)} />
-        <label className="field-group"><span>Marca</span><select value={filters.brand} onChange={(e) => setFilters((prev) => ({ ...prev, brand: e.target.value, model: '' }))}><option value="">Todas</option>{BRANDS.map((brand) => <option key={brand} value={brand}>{brand}</option>)}</select></label>
-        <label className="field-group"><span>Modelo</span><select value={filters.model} onChange={(e) => update('model', e.target.value)} disabled={!filters.brand}><option value="">Todos</option>{modelOptions.map((model) => <option key={model} value={model}>{model}</option>)}</select></label>
+        <input placeholder="Pesquisar por veículo, marca, modelo ou cidade" value={filters.q} onChange={(e) => update('q', e.target.value)} />
+        <input placeholder="Cidade" value={filters.city} onChange={(e) => update('city', e.target.value)} />
+        <input placeholder="Bairro" value={filters.neighborhood} onChange={(e) => update('neighborhood', e.target.value)} />
         <label className="field-group"><span>Ordenar por</span><select value={filters.sortBy} onChange={(e) => update('sortBy', e.target.value)}>{SORT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+
+        <label className="field-group"><span>Marca</span><select value={filters.brand} onChange={(e) => setFilters((prev) => ({ ...prev, brand: e.target.value, model: '', page: 1 }))}><option value="">Todas</option>{BRANDS.map((brand) => <option key={brand} value={brand}>{brand}</option>)}</select></label>
+        <label className="field-group"><span>Modelo</span><select value={filters.model} onChange={(e) => update('model', e.target.value)} disabled={!filters.brand}><option value="">Todos</option>{modelOptions.map((model) => <option key={model} value={model}>{model}</option>)}</select></label>
+        <label className="field-group"><span>Combustível</span><select value={filters.fuel} onChange={(e) => update('fuel', e.target.value)}><option value="">Todos</option>{FUELS.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+        <label className="field-group"><span>Câmbio</span><select value={filters.transmission} onChange={(e) => update('transmission', e.target.value)}><option value="">Todos</option>{TRANSMISSIONS.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+
+        <label className="field-group"><span>Cor</span><select value={filters.color} onChange={(e) => update('color', e.target.value)}><option value="">Todas</option>{COLORS.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+        <input placeholder="Preço mínimo" value={filters.minPrice} onChange={(e) => update('minPrice', e.target.value)} />
+        <input placeholder="Preço máximo" value={filters.maxPrice} onChange={(e) => update('maxPrice', e.target.value)} />
+        <label className="checkbox-row"><input type="checkbox" checked={!!filters.onlyWithPhoto} onChange={(e) => update('onlyWithPhoto', e.target.checked)} />Somente com foto</label>
+
+        <input placeholder="Ano mínimo" value={filters.minYear} onChange={(e) => update('minYear', e.target.value)} />
+        <input placeholder="Ano máximo" value={filters.maxYear} onChange={(e) => update('maxYear', e.target.value)} />
+        <input placeholder="KM mínima" value={filters.minKm} onChange={(e) => update('minKm', e.target.value)} />
+        <input placeholder="KM máxima" value={filters.maxKm} onChange={(e) => update('maxKm', e.target.value)} />
       </div>
     </section>
   );
@@ -348,24 +386,30 @@ function Filters({ filters, setFilters, onRefresh, total }) {
 
 function ListingCard({ listing, auth, onOpen, onToggleFavorite }) {
   const primary = getPrimaryImage(listing.images);
-  const whatsappUrl = buildWhatsAppUrl(listing.phone, listing.title);
+  const whatsappUrl = buildWhatsAppUrl(listing.phone, listing.title, listing.city);
+  const sellerLabel = listing.seller?.type === 'LOJA' ? 'Loja ativa' : listing.seller?.type === 'REVENDA' ? 'Revenda' : 'Particular';
   return (
     <article className="listing-card card">
       <div className="thumb-wrap">
         <img src={primary?.imageUrl || 'https://via.placeholder.com/800x500?text=Sem+imagem'} alt={listing.title} className="thumb" />
-        <div className="pill-stack"><span className={`status-pill ${(listing.status || 'APPROVED').toLowerCase()}`}>{listing.status}</span>{listing.isFeatured && <span className="status-pill featured">DESTAQUE</span>}</div>
+        <div className="pill-stack">
+          <span className={`status-pill ${(listing.status || 'APPROVED').toLowerCase()}`}>{listing.status}</span>
+          {listing.isFeatured && <span className="status-pill featured">DESTAQUE</span>}
+        </div>
       </div>
       <div className="listing-body">
         <div>
           <h3>{listing.title}</h3>
           <p>{listing.brand} {listing.model} • {listing.year} • {listing.km} km</p>
           <p>{listing.city} / {listing.neighborhood}</p>
+          <p className="subtle">{listing.seller?.name || listing.user?.storeName || listing.user?.companyName || listing.user?.name || 'Vendedor'} • {sellerLabel}</p>
         </div>
         <strong>{currency(listing.price)}</strong>
         <div className="chip-row">
           <span>{listing.fuel || 'Combustível não informado'}</span>
           <span>{listing.transmission || 'Câmbio não informado'}</span>
           <span>{listing.color || 'Cor não informada'}</span>
+          {!!listing.favoriteCount && <span>{listing.favoriteCount} favorito(s)</span>}
         </div>
         <div className="actions-row wrap">
           <button onClick={() => onOpen(listing)}>Ver detalhes</button>
@@ -388,6 +432,30 @@ function ListingGrid({ listings, auth, onOpen, onToggleFavorite }) {
       {listings.map((listing) => (
         <ListingCard key={listing.id} listing={listing} auth={auth} onOpen={onOpen} onToggleFavorite={onToggleFavorite} />
       ))}
+    </section>
+  );
+}
+
+function PaginationBar({ meta, onChange }) {
+  if (!meta?.totalPages || meta.totalPages <= 1) return null;
+  const pages = [];
+  for (let page = 1; page <= meta.totalPages; page += 1) {
+    if (page === 1 || page === meta.totalPages || Math.abs(page - meta.page) <= 1) pages.push(page);
+  }
+  const compactPages = pages.filter((page, index) => index === 0 || page !== pages[index - 1]).flatMap((page, index, arr) => {
+    if (index > 0 && page - arr[index - 1] > 1) return ['...', page];
+    return [page];
+  });
+
+  return (
+    <section className="card">
+      <div className="actions-row wrap" style={{ justifyContent: 'center' }}>
+        <button className="ghost" disabled={!meta.hasPrevPage} onClick={() => onChange(meta.page - 1)}>Anterior</button>
+        {compactPages.map((item, index) => item === '...'
+          ? <span key={`ellipsis-${index}`} className="subtle" style={{ padding: '12px 6px' }}>…</span>
+          : <button key={item} className={item === meta.page ? '' : 'ghost'} onClick={() => onChange(item)}>{item}</button>)}
+        <button className="ghost" disabled={!meta.hasNextPage} onClick={() => onChange(meta.page + 1)}>Próxima</button>
+      </div>
     </section>
   );
 }
@@ -622,9 +690,12 @@ function ListingForm({ auth, editing, onSaved, onCancel }) {
     setMessage('');
     try {
       const payload = { ...form, price: Number(form.price), year: Number(form.year), km: Number(form.km) };
-      if (editing) await api(`/listings/${editing.id}`, { method: 'PUT', body: JSON.stringify(payload) }, auth.token);
-      else await api('/listings', { method: 'POST', body: JSON.stringify(payload) }, auth.token);
-      setMessage('Anúncio salvo com sucesso.');
+      const saved = editing
+        ? await api(`/listings/${editing.id}`, { method: 'PUT', body: JSON.stringify(payload) }, auth.token)
+        : await api('/listings', { method: 'POST', body: JSON.stringify(payload) }, auth.token);
+      setMessage(saved?.status === 'PENDING'
+        ? 'Anúncio salvo e enviado para análise. Ele aparecerá no catálogo depois da aprovação.'
+        : 'Anúncio salvo com sucesso.');
       setForm({ ...listingInitial, phone: auth.user?.phone || '' });
       setGeoState({ loading: false, tried: false, message: '' });
       onSaved();
@@ -640,7 +711,7 @@ function ListingForm({ auth, editing, onSaved, onCancel }) {
       <div className="section-title">
         <div>
           <h2>{editing ? 'Editar anúncio' : 'Novo anúncio'}</h2>
-          <p>Mais padronização, seleção de modelo por marca, foto principal e contato via WhatsApp.</p>
+          <p>Busca mais profissional: fotos otimizadas, localização sugerida e moderação antes de entrar no catálogo.</p>
         </div>
         <div className="actions-row wrap">
           {!editing && <button type="button" className="ghost" onClick={detectLocation} disabled={geoState.loading}>{geoState.loading ? 'Localizando...' : 'Usar localização do dispositivo'}</button>}
@@ -674,7 +745,7 @@ function ListingForm({ auth, editing, onSaved, onCancel }) {
             <span>Adicionar fotos do dispositivo</span>
             <input type="file" accept="image/*" multiple onChange={addPhotos} />
           </label>
-          <small>JPG, PNG ou WEBP. Máximo de 15 fotos. Você pode escolher a principal e reorganizar a ordem.</small>
+          <small>JPG, PNG ou WEBP. Máximo de 15 fotos. As imagens são otimizadas automaticamente para ficar mais leve no celular. Você pode escolher a principal e reorganizar a ordem.</small>
           <div className="image-preview-grid">
             {form.images.map((img, index) => (
               <div key={`${img.imageUrl.slice(0, 30)}-${index}`} className={`preview-card ${img.isPrimary ? 'primary' : ''}`}>
@@ -940,8 +1011,16 @@ function AdminPanel({ adminData, refreshAdmin, changeStatus, toggleFeature, upda
     setCreatingPlan(false);
     setEditingPlan(plan.id);
     setPlanForm({
-      name: plan.name || '', slug: plan.slug || '', priceMonthly: plan.priceMonthly, listingLimit: plan.listingLimit, featuredSlots: plan.featuredSlots,
-      displayOrder: plan.displayOrder || 0, isRecommended: !!plan.isRecommended, isActive: !!plan.isActive, description: plan.description || '', benefits: planBenefits(plan).join('\n'),
+      name: plan.name || '',
+      slug: plan.slug || '',
+      priceMonthly: plan.priceMonthly,
+      listingLimit: plan.listingLimit,
+      featuredSlots: plan.featuredSlots,
+      displayOrder: plan.displayOrder || 0,
+      isRecommended: !!plan.isRecommended,
+      isActive: !!plan.isActive,
+      description: plan.description || '',
+      benefits: planBenefits(plan).join('\n'),
     });
   };
 
@@ -958,6 +1037,7 @@ function AdminPanel({ adminData, refreshAdmin, changeStatus, toggleFeature, upda
         <div><strong>{adminData.dashboard.featured || 0}</strong><span>Destaques</span></div>
         <div><strong>{adminData.dashboard.activeSubscriptions || 0}</strong><span>Assinaturas ativas</span></div>
       </section>
+
       <section className="card">
         <div className="section-title"><div><h2>Configuração de planos</h2><p>O admin cria, ordena, recomenda, ativa e ajusta preços e limites direto no painel.</p></div><div className="actions-row wrap"><button className="ghost" onClick={refreshAdmin}>Atualizar admin</button><button onClick={openCreatePlan}>Novo plano</button></div></div>
         {creatingPlan && (
@@ -1002,10 +1082,57 @@ function AdminPanel({ adminData, refreshAdmin, changeStatus, toggleFeature, upda
           ))}
         </div>
       </section>
+
       <section className="card"><div className="section-title"><div><h2>Usuários</h2><p>Gerencie usuários e acompanhe seus volumes.</p></div></div><div className="table-like">{(adminData.users || []).map((user) => <div key={user.id} className="table-row"><div><strong>{user.name}</strong><span>{user.email} • {user.role} • {user.companyName || 'Sem empresa'}</span></div><span>{user._count?.listings || 0} anúncio(s)</span></div>)}{!(adminData.users || []).length && <p className="empty-inline">Nenhum usuário encontrado.</p>}</div></section>
-      <section className="card"><div className="section-title"><div><h2>Anúncios do sistema</h2><p>O admin acompanha anúncios ativos e controla destaques quando necessário.</p></div></div><div className="table-like">{adminData.listings.map((listing) => (<div key={listing.id} className="table-row admin-row"><div><strong>{listing.title}</strong><span>{listing.user.name} • {listing.status} • {currency(listing.price)}</span></div><div className="actions-row wrap"><button className="ghost" onClick={() => toggleFeature(listing.id, !listing.isFeatured)}>{listing.isFeatured ? 'Remover destaque' : 'Dar destaque'}</button></div></div>))}</div></section>
-      <section className="card"><h2>Assinaturas</h2><div className="table-like">{(adminData.subscriptions || []).map((item) => (<div key={item.id} className="table-row stacked-row"><div><strong>{item.user?.name}</strong><span>{item.plan?.name} • {formatSubscriptionStatus(item.status)} • {currency(item.plan?.priceMonthly || 0)}</span></div><p className="subtle">O plano Particular já nasce ativo. Lojista e Premium passam a ativar automaticamente quando o pagamento é aprovado.</p></div>))}</div></section>
-      <section className="card"><h2>Pagamentos</h2><div className="table-like">{(adminData.payments || []).map((item) => (<div key={item.id} className="table-row stacked-row"><div><strong>{item.user?.name}</strong><span>{item.type} • {currency(item.amount)} • {formatPaymentStatus(item.status)}</span></div><p>{item.description || 'Cobrança do sistema'}</p><p className="subtle">Atualização automática pela consulta do pagamento.</p></div>))}{!(adminData.payments || []).length && <p className="empty-inline">Nenhum pagamento registrado ainda.</p>}</div></section>
+
+      <section className="card">
+        <div className="section-title"><div><h2>Anúncios do sistema</h2><p>O admin agora modera anúncios pendentes e controla destaques quando necessário.</p></div></div>
+        <div className="table-like">
+          {adminData.listings.map((listing) => (
+            <div key={listing.id} className="table-row stacked-row">
+              <div><strong>{listing.title}</strong><span>{listing.user.name} • {listing.status} • {currency(listing.price)} • {listing.city}</span></div>
+              <div className="chip-row"><span>{listing._count?.favorites || 0} favorito(s)</span><span>{listing._count?.leads || 0} lead(s)</span></div>
+              <div className="actions-row wrap">
+                {listing.status !== 'APPROVED' && <button onClick={() => changeStatus(listing.id, 'APPROVED')}>Aprovar</button>}
+                {listing.status !== 'PENDING' && <button className="ghost" onClick={() => changeStatus(listing.id, 'PENDING')}>Voltar para análise</button>}
+                {listing.status !== 'REJECTED' && <button className="danger" onClick={() => changeStatus(listing.id, 'REJECTED')}>Rejeitar</button>}
+                <button className="ghost" onClick={() => toggleFeature(listing.id, !listing.isFeatured)}>{listing.isFeatured ? 'Remover destaque' : 'Dar destaque'}</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="card">
+        <h2>Assinaturas</h2>
+        <div className="table-like">
+          {(adminData.subscriptions || []).map((item) => (
+            <div key={item.id} className="table-row stacked-row">
+              <div><strong>{item.user?.name}</strong><span>{item.plan?.name} • {formatSubscriptionStatus(item.status)} • {currency(item.plan?.priceMonthly || 0)}</span></div>
+              <p className="subtle">Início: {formatDate(item.startedAt)} • Expira em: {formatDate(item.expiresAt)}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="card">
+        <h2>Pagamentos</h2>
+        <div className="table-like">
+          {(adminData.payments || []).map((item) => (
+            <div key={item.id} className="table-row stacked-row">
+              <div><strong>{item.user?.name}</strong><span>{item.type} • {currency(item.amount)} • {formatPaymentStatus(item.status)}</span></div>
+              <p>{item.description || 'Cobrança do sistema'}</p>
+              <div className="actions-row wrap">
+                <button className="ghost" onClick={() => updatePaymentStatus(item.id, 'PENDING')}>Marcar pendente</button>
+                <button onClick={() => updatePaymentStatus(item.id, 'PAID')}>Marcar pago</button>
+                <button className="danger" onClick={() => updatePaymentStatus(item.id, 'CANCELLED')}>Cancelar</button>
+              </div>
+            </div>
+          ))}
+          {!(adminData.payments || []).length && <p className="empty-inline">Nenhum pagamento registrado ainda.</p>}
+        </div>
+      </section>
+
       <section className="card"><h2>Leads do sistema</h2><div className="table-like">{adminData.leads.map((lead) => (<div key={lead.id} className="table-row stacked-row"><div><strong>{lead.name}</strong><span>{lead.phone} • {lead.listing?.title || 'Sem anúncio'}</span></div><p>{lead.message}</p></div>))}{!adminData.leads.length && <p className="empty-inline">Nenhum lead registrado ainda.</p>}</div></section>
     </div>
   );
@@ -1142,20 +1269,22 @@ function PlansPage({ plans, subscription, onSubscribe, paymentConfig }) {
   );
 }
 
+
 export default function App() {
   const [auth, setAuth] = useState(() => {
     const saved = localStorage.getItem('automarket-auth');
     return saved ? JSON.parse(saved) : emptyAuth;
   });
   const [currentView, setCurrentView] = useState('home');
-  const [filters, setFilters] = useState({ q: '', brand: '', model: '', sortBy: 'recent' });
-  const [listings, setListings] = useState(() => readCache(CACHE_KEYS.listings, []));
+  const [filters, setFilters] = useState(filterInitial);
+  const [listings, setListings] = useState([]);
+  const [listingMeta, setListingMeta] = useState({ page: 1, perPage: 12, total: 0, totalPages: 1, hasNextPage: false, hasPrevPage: false });
   const [myListings, setMyListings] = useState([]);
   const [favoriteListings, setFavoriteListings] = useState([]);
   const [sellerLeads, setSellerLeads] = useState([]);
-  const [plans, setPlans] = useState(() => readCache(CACHE_KEYS.plans, []));
+  const [plans, setPlans] = useState([]);
   const [payments, setPayments] = useState([]);
-  const [stores, setStores] = useState(() => readCache(CACHE_KEYS.stores, []));
+  const [stores, setStores] = useState([]);
   const [myStore, setMyStore] = useState({ canManageStore: false, planSlug: 'particular', planName: 'Particular', profile: storeProfileInitial });
   const [paymentConfig, setPaymentConfig] = useState({ enabled: false, provider: 'LOCAL_SIMULATION' });
   const [checkoutState, setCheckoutState] = useState(null);
@@ -1170,55 +1299,46 @@ export default function App() {
     localStorage.setItem('automarket-auth', JSON.stringify(auth));
   }, [auth]);
 
-
-
-
-
   const fetchListings = async () => {
     try {
       const query = new URLSearchParams();
       Object.entries(filters).forEach(([key, value]) => {
-        if (value !== '' && value !== false) query.set(key, String(value));
+        if (value !== '' && value !== false && value != null) query.set(key, String(value));
       });
-      const data = await api(`/listings?${query.toString()}`, {
-        headers: auth.user ? { 'x-user-id': String(auth.user.id) } : {}
-      }, auth.token);
-      setListings(data);
-      writeCache(CACHE_KEYS.listings, data);
-      if (message === 'Não foi possível atualizar os anúncios. Exibindo a última versão salva.') setMessage('');
+      const data = await api(`/listings?${query.toString()}`, {}, auth.token);
+      const items = Array.isArray(data) ? data : data.items || [];
+      const meta = Array.isArray(data)
+        ? { page: filters.page || 1, perPage: filters.perPage || items.length || 12, total: items.length, totalPages: 1, hasNextPage: false, hasPrevPage: false }
+        : data.meta || { page: 1, perPage: 12, total: items.length, totalPages: 1, hasNextPage: false, hasPrevPage: false };
+      setListings(items);
+      setListingMeta(meta);
     } catch (error) {
-      const cached = readCache(CACHE_KEYS.listings, []);
-      if (cached.length) {
-        setListings(cached);
-        setMessage('Não foi possível atualizar os anúncios. Exibindo a última versão salva.');
-      } else {
-        setMessage(error.message);
-      }
+      setMessage(error.message);
     }
   };
 
   const fetchMyListings = async () => {
-    if (!auth.user) return;
+    if (!auth.user) return setMyListings([]);
     try {
       const mine = await api('/listings/mine', {}, auth.token);
       setMyListings(mine);
     } catch (error) {
-      setMessage((prev) => prev || error.message);
+      setMessage(error.message);
     }
   };
 
   const fetchFavoriteListings = async () => {
-    if (!auth.user) return;
+    if (!auth.user) return setFavoriteListings([]);
     try {
-      const data = await api('/listings', { headers: { 'x-user-id': String(auth.user.id) } }, auth.token);
-      setFavoriteListings(data.filter((listing) => listing.isFavorite));
+      const data = await api('/listings?favoriteOnly=true&page=1&perPage=100', {}, auth.token);
+      setFavoriteListings(Array.isArray(data) ? data : data.items || []);
     } catch (error) {
-      setMessage((prev) => prev || error.message);
+      setMessage(error.message);
     }
   };
 
   const fetchSellerLeads = async () => {
-    if (!auth.user) return;
+    if (!auth.user) return setSellerLeads([]);
     try {
       const leads = await api('/listings/mine/leads', {}, auth.token);
       setSellerLeads(leads);
@@ -1231,29 +1351,18 @@ export default function App() {
     try {
       const [data, config] = await Promise.all([api('/plans'), api('/payments/config')]);
       setPlans(data);
-      writeCache(CACHE_KEYS.plans, data);
       setPaymentConfig(config);
     } catch (error) {
-      const cached = readCache(CACHE_KEYS.plans, []);
-      if (cached.length) {
-        setPlans(cached);
-      }
-      setMessage((prev) => prev || 'Não foi possível atualizar os planos agora.');
+      setMessage(error.message);
     }
   };
-
 
   const fetchStores = async () => {
     try {
       const data = await api('/stores');
       setStores(data);
-      writeCache(CACHE_KEYS.stores, data);
     } catch (error) {
-      const cached = readCache(CACHE_KEYS.stores, []);
-      if (cached.length) {
-        setStores(cached);
-      }
-      setMessage((prev) => prev || 'Não foi possível atualizar as lojas agora.');
+      setMessage(error.message);
     }
   };
 
@@ -1268,7 +1377,11 @@ export default function App() {
   };
 
   const fetchSubscription = async () => {
-    if (!auth.user) return setSubscription(null);
+    if (!auth.user) {
+      setSubscription(null);
+      setPayments([]);
+      return;
+    }
     try {
       const [data, myPayments] = await Promise.all([api('/plans/my-subscription', {}, auth.token), api('/payments/mine', {}, auth.token)]);
       setSubscription(data);
@@ -1281,7 +1394,7 @@ export default function App() {
   const fetchAdmin = async () => {
     if (auth.user?.role !== 'ADMIN') return;
     try {
-      const [dashboard, adminListings, leads, subscriptions, payments, adminPlans, users] = await Promise.all([
+      const [dashboard, adminListings, leads, subscriptions, adminPayments, adminPlans, users] = await Promise.all([
         api('/admin/dashboard', {}, auth.token),
         api('/admin/listings', {}, auth.token),
         api('/admin/leads', {}, auth.token),
@@ -1290,42 +1403,58 @@ export default function App() {
         api('/plans/admin/plans', {}, auth.token),
         api('/admin/users', {}, auth.token),
       ]);
-      setAdminData({ dashboard, listings: adminListings, leads, subscriptions, payments, plans: adminPlans, users });
+      setAdminData({ dashboard, listings: adminListings, leads, subscriptions, payments: adminPayments, plans: adminPlans, users });
     } catch (error) {
       setMessage(error.message);
     }
   };
 
+  const refreshPrivateData = async () => {
+    if (!auth.user) return;
+    await Promise.all([
+      fetchMyListings(),
+      fetchFavoriteListings(),
+      fetchSellerLeads(),
+      fetchSubscription(),
+      fetchMyStore(),
+      auth.user.role === 'ADMIN' ? fetchAdmin() : Promise.resolve(),
+    ]);
+  };
+
+  const refreshAll = async () => {
+    await Promise.all([
+      fetchListings(),
+      fetchPlans(),
+      fetchStores(),
+      auth.user ? refreshPrivateData() : Promise.resolve(),
+    ]);
+  };
+
   useEffect(() => {
-    fetchListings();
     fetchPlans();
     fetchStores();
-    const interval = setInterval(() => {
-      fetchListings();
-      fetchStores();
-    }, 45000);
-    return () => clearInterval(interval);
   }, []);
-  useEffect(() => { fetchListings(); }, [filters]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      fetchListings();
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [filters, auth.token]);
 
   useEffect(() => {
     if (auth.user) {
-      fetchListings();
-      fetchMyListings();
-      fetchFavoriteListings();
-      fetchSellerLeads();
-      fetchSubscription();
-      fetchMyStore();
-      if (auth.user.role === 'ADMIN') fetchAdmin();
+      refreshPrivateData();
     } else {
       setMyListings([]);
       setFavoriteListings([]);
       setSellerLeads([]);
       setSubscription(null);
+      setPayments([]);
       setMyStore({ canManageStore: false, planSlug: 'particular', planName: 'Particular', profile: storeProfileInitial });
-          }
-  }, [auth.user]);
-
+      setAdminData({ dashboard: { users: 0, listings: 0, pending: 0, leads: 0, featured: 0, activeSubscriptions: 0 }, listings: [], leads: [], subscriptions: [], payments: [], plans: [], users: [] });
+    }
+  }, [auth.user, auth.token]);
 
   useEffect(() => {
     if (!checkoutState) return;
@@ -1337,9 +1466,7 @@ export default function App() {
 
     if (paymentApproved || planActivated || featuredApplied) {
       setCheckoutState(null);
-      if (paymentApproved || planActivated) {
-        setMessage('Pagamento aprovado e plano ativado com sucesso.');
-      }
+      setMessage(checkoutState.type === 'FEATURED' ? 'Pagamento aprovado e destaque aplicado com sucesso.' : 'Pagamento aprovado e plano ativado com sucesso.');
     }
 
     if (paymentRejected) {
@@ -1350,27 +1477,24 @@ export default function App() {
 
   useEffect(() => {
     if (!checkoutState?.paymentId || !auth.token) return;
-
     const relatedPayment = payments.find((item) => item.id === checkoutState.paymentId);
     const terminal = ['PAID', 'EXPIRED', 'CANCELLED', 'REJECTED'].includes(relatedPayment?.status);
     if (terminal) return;
 
     let cancelled = false;
-    const runRefresh = async (silent = false) => {
+    const runRefresh = async () => {
       try {
         await api(`/payments/${checkoutState.paymentId}/refresh`, { method: 'POST' }, auth.token);
         if (!cancelled) {
-          await refreshAll();
-          if (!silent) setMessage('Status do pagamento atualizado automaticamente.');
+          await Promise.all([fetchSubscription(), fetchMyListings(), fetchListings()]);
         }
       } catch (error) {
-        if (!cancelled && !silent) setMessage(error.message);
+        if (!cancelled) setMessage(error.message);
       }
     };
 
-    runRefresh(true);
-    const interval = setInterval(() => runRefresh(true), 3000);
-
+    runRefresh();
+    const interval = setInterval(runRefresh, 8000);
     return () => {
       cancelled = true;
       clearInterval(interval);
@@ -1387,15 +1511,7 @@ export default function App() {
     setAuth(emptyAuth);
     setCurrentView('home');
     setEditingListing(null);
-  };
-
-  const refreshAll = async () => {
-    const tasks = [fetchListings(), fetchPlans(), fetchStores()];
-    if (auth.user) {
-      tasks.push(fetchMyListings(), fetchFavoriteListings(), fetchSellerLeads(), fetchSubscription(), fetchMyStore());
-      if (auth.user.role === 'ADMIN') tasks.push(fetchAdmin());
-    }
-    await Promise.allSettled(tasks);
+    setFilters(filterInitial);
   };
 
   const toggleFavorite = async (listing) => {
@@ -1406,9 +1522,9 @@ export default function App() {
     try {
       if (listing.isFavorite) await api(`/listings/${listing.id}/favorite`, { method: 'DELETE' }, auth.token);
       else await api(`/listings/${listing.id}/favorite`, { method: 'POST' }, auth.token);
-      await refreshAll();
+      await Promise.all([fetchListings(), fetchFavoriteListings()]);
       if (selectedListing?.id === listing.id) {
-        const updated = await api(`/listings/${listing.id}`, { headers: { 'x-user-id': String(auth.user.id) } }, auth.token);
+        const updated = await api(`/listings/${listing.id}`, {}, auth.token);
         setSelectedListing(updated);
       }
     } catch (error) {
@@ -1430,7 +1546,9 @@ export default function App() {
   const changeStatus = async (id, status) => {
     try {
       await api(`/admin/listings/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }, auth.token);
-      await refreshAll();
+      await fetchAdmin();
+      await fetchListings();
+      await fetchMyListings();
     } catch (error) {
       setMessage(error.message);
     }
@@ -1439,7 +1557,7 @@ export default function App() {
   const updateLeadStatus = async (leadId, status) => {
     try {
       await api(`/listings/leads/${leadId}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }, auth.token);
-      await refreshAll();
+      await fetchSellerLeads();
     } catch (error) {
       setMessage(error.message);
     }
@@ -1472,7 +1590,9 @@ export default function App() {
   const toggleFeature = async (listingId, isFeatured) => {
     try {
       await api(`/admin/listings/${listingId}/feature`, { method: 'PATCH', body: JSON.stringify({ isFeatured }) }, auth.token);
-      await refreshAll();
+      await fetchAdmin();
+      await fetchListings();
+      await fetchMyListings();
     } catch (error) {
       setMessage(error.message);
     }
@@ -1481,16 +1601,7 @@ export default function App() {
   const updatePaymentStatus = async (paymentId, status) => {
     try {
       await api(`/payments/admin/${paymentId}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }, auth.token);
-      await refreshAll();
-    } catch (error) {
-      setMessage(error.message);
-    }
-  };
-
-  const updateSubscriptionStatus = async (subscriptionId, status) => {
-    try {
-      await api(`/plans/admin/subscriptions/${subscriptionId}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }, auth.token);
-      await refreshAll();
+      await Promise.all([fetchAdmin(), fetchSubscription(), fetchMyListings(), fetchListings()]);
     } catch (error) {
       setMessage(error.message);
     }
@@ -1500,7 +1611,7 @@ export default function App() {
     try {
       const data = await api(`/payments/${paymentId}/refresh`, { method: 'POST' }, auth.token);
       setMessage(`Status atualizado: ${formatPaymentStatus(data.status)}.`);
-      await refreshAll();
+      await Promise.all([fetchSubscription(), fetchMyListings(), fetchListings()]);
     } catch (error) {
       setMessage(error.message);
     }
@@ -1510,7 +1621,7 @@ export default function App() {
     try {
       await api('/plans/admin/plans', { method: 'POST', body: JSON.stringify(payload) }, auth.token);
       setMessage('Plano criado com sucesso.');
-      await refreshAll();
+      await fetchAdmin();
     } catch (error) {
       setMessage(error.message);
       throw error;
@@ -1521,7 +1632,7 @@ export default function App() {
     try {
       await api(`/plans/admin/plans/${planId}`, { method: 'PATCH', body: JSON.stringify(payload) }, auth.token);
       setMessage('Plano atualizado com sucesso.');
-      await refreshAll();
+      await fetchAdmin();
     } catch (error) {
       setMessage(error.message);
     }
@@ -1531,18 +1642,17 @@ export default function App() {
     try {
       await api(`/plans/admin/plans/${planId}`, { method: 'DELETE' }, auth.token);
       setMessage('Plano removido ou inativado com sucesso.');
-      await refreshAll();
+      await fetchAdmin();
     } catch (error) {
       setMessage(error.message);
     }
   };
 
-
   const saveMyStore = async (payload) => {
     try {
       await api('/stores/me', { method: 'PUT', body: JSON.stringify(payload) }, auth.token);
       setMessage('Loja atualizada com sucesso.');
-      await refreshAll();
+      await Promise.all([fetchMyStore(), fetchStores()]);
       setCurrentView('lojas');
     } catch (error) {
       setMessage(error.message);
@@ -1555,9 +1665,7 @@ export default function App() {
 
   const openListing = async (listing) => {
     try {
-      const data = await api(`/listings/${listing.id}`, {
-        headers: auth.user ? { 'x-user-id': String(auth.user.id) } : {}
-      }, auth.token);
+      const data = await api(`/listings/${listing.id}`, {}, auth.token);
       setSelectedListing(data);
     } catch (error) {
       setMessage(error.message);
@@ -1586,9 +1694,10 @@ export default function App() {
       <main className="container">
         {currentView === 'home' && (
           <>
-            <Hero listingsCount={listings.length} onOpenAuth={() => setCurrentView(auth.user ? 'dashboard' : 'auth')} setCurrentView={setCurrentView} />
-            <Filters filters={filters} setFilters={setFilters} onRefresh={fetchListings} total={listings.length} />
+            <Hero listingsCount={listingMeta.total || listings.length} onOpenAuth={() => setCurrentView(auth.user ? 'dashboard' : 'auth')} setCurrentView={setCurrentView} />
+            <Filters filters={filters} setFilters={setFilters} onRefresh={fetchListings} total={listingMeta.total || listings.length} meta={listingMeta} />
             <ListingGrid listings={listings} auth={auth} onOpen={openListing} onToggleFavorite={toggleFavorite} />
+            <PaginationBar meta={listingMeta} onChange={(page) => setFilters((prev) => ({ ...prev, page }))} />
           </>
         )}
 
@@ -1626,7 +1735,7 @@ export default function App() {
         )}
 
         {currentView === 'admin' && auth.user?.role === 'ADMIN' && (
-          <AdminPanel adminData={adminData} refreshAdmin={refreshAll} changeStatus={changeStatus} toggleFeature={toggleFeature} updatePaymentStatus={updatePaymentStatus} updatePlan={updatePlan} createPlan={createPlan} deletePlan={deletePlan} />
+          <AdminPanel adminData={adminData} refreshAdmin={fetchAdmin} changeStatus={changeStatus} toggleFeature={toggleFeature} updatePaymentStatus={updatePaymentStatus} updatePlan={updatePlan} createPlan={createPlan} deletePlan={deletePlan} />
         )}
 
         {currentView === 'lojas' && <StoresPage stores={stores} onOpenStore={openStore} />}

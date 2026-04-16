@@ -1,23 +1,75 @@
 const express = require('express');
 const prisma = require('../utils/prisma');
-const { authRequired } = require('../middleware/auth');
-const { toNumber, choosePrimary } = require('../utils/helpers');
+const { authRequired, optionalAuth } = require('../middleware/auth');
+const {
+  toNumber,
+  choosePrimary,
+  sanitizeString,
+  normalizePhone,
+  validateImagesPayload,
+  normalizePage,
+  normalizePerPage,
+} = require('../utils/helpers');
+const { runMarketplaceMaintenance, getListingLimitForUser } = require('../utils/marketplaceLifecycle');
 
 const router = express.Router();
 
 function includeConfig(userId = null) {
-  return {
-    user: { select: { id: true, name: true, phone: true, companyName: true, storeName: true, storeLogoUrl: true, storeBannerUrl: true, storeDescription: true, storeCity: true, storeNeighborhood: true, storeWhatsapp: true, storeIsActive: true } },
+  const include = {
+    user: {
+      select: {
+        id: true,
+        name: true,
+        phone: true,
+        companyName: true,
+        storeName: true,
+        storeLogoUrl: true,
+        storeBannerUrl: true,
+        storeDescription: true,
+        storeCity: true,
+        storeNeighborhood: true,
+        storeWhatsapp: true,
+        storeIsActive: true,
+        createdAt: true,
+        _count: { select: { listings: true } },
+      },
+    },
     images: { orderBy: { sortOrder: 'asc' } },
-    favorites: userId ? { where: { userId }, select: { id: true } } : false,
-    _count: { select: { favorites: true, leads: true } }
+    _count: { select: { favorites: true, leads: true } },
   };
+
+  if (userId) include.favorites = { where: { userId }, select: { id: true } };
+  return include;
 }
 
 function serializeListing(listing) {
-  return { ...listing, isFavorite: !!listing.favorites?.length, favorites: undefined };
+  const sellerName = listing.user?.storeName || listing.user?.companyName || listing.user?.name || 'Vendedor';
+  const sellerType = listing.user?.storeIsActive ? 'LOJA' : listing.user?.companyName ? 'REVENDA' : 'PARTICULAR';
+
+  return {
+    ...listing,
+    isFavorite: !!listing.favorites?.length,
+    favorites: undefined,
+    favoriteCount: listing._count?.favorites || 0,
+    leadCount: listing._count?.leads || 0,
+    seller: {
+      id: listing.user?.id || null,
+      name: sellerName,
+      type: sellerType,
+      memberSince: listing.user?.createdAt || null,
+      listingCount: listing.user?._count?.listings || 0,
+      city: listing.user?.storeCity || listing.city,
+      neighborhood: listing.user?.storeNeighborhood || listing.neighborhood,
+      whatsapp: listing.user?.storeWhatsapp || listing.phone,
+      storeIsActive: !!listing.user?.storeIsActive,
+    },
+  };
 }
-function containsFilter(value) { return value ? { contains: value, mode: 'insensitive' } : undefined; }
+
+function containsFilter(value) {
+  return value ? { contains: value, mode: 'insensitive' } : undefined;
+}
+
 function buildOrderBy(sortBy) {
   const secondary = { createdAt: 'desc' };
   switch (sortBy) {
@@ -29,12 +81,57 @@ function buildOrderBy(sortBy) {
   }
 }
 
-router.get('/', async (req, res) => {
-  try {
-    const { q, brand, model, city, neighborhood, fuel, transmission, color, minPrice, maxPrice, minYear, maxYear, minKm, maxKm, status, sortBy = 'recent', onlyWithPhoto } = req.query;
-    const andFilters = [];
+function buildListingData(payload = {}) {
+  return {
+    title: sanitizeString(payload.title, 140),
+    description: sanitizeString(payload.description, 5000),
+    price: toNumber(payload.price),
+    brand: sanitizeString(payload.brand, 60),
+    model: sanitizeString(payload.model, 80),
+    year: toNumber(payload.year),
+    km: toNumber(payload.km),
+    transmission: sanitizeString(payload.transmission, 40),
+    fuel: sanitizeString(payload.fuel, 40),
+    color: sanitizeString(payload.color, 40),
+    city: sanitizeString(payload.city, 80),
+    neighborhood: sanitizeString(payload.neighborhood, 80),
+    phone: sanitizeString(payload.phone, 30),
+  };
+}
 
-    if (q) andFilters.push({ OR: [{ title: containsFilter(q) }, { description: containsFilter(q) }, { brand: containsFilter(q) }, { model: containsFilter(q) }] });
+function validateListingData(data) {
+  if (!data.title || !data.description || !data.price || !data.brand || !data.model || !data.year || !data.phone) {
+    return 'Preencha os campos obrigatórios do anúncio.';
+  }
+  if (!data.city || !data.neighborhood) return 'Informe a localização do veículo.';
+  if (data.year < 1900 || data.year > new Date().getFullYear() + 1) return 'Ano do veículo inválido.';
+  if (data.km < 0) return 'KM inválida.';
+  if (data.price <= 0) return 'Preço inválido.';
+  return null;
+}
+
+router.get('/', optionalAuth, async (req, res) => {
+  try {
+    await runMarketplaceMaintenance();
+    const {
+      q, brand, model, city, neighborhood, fuel, transmission, color,
+      minPrice, maxPrice, minYear, maxYear, minKm, maxKm,
+      status, sortBy = 'recent', onlyWithPhoto, favoriteOnly, page, perPage
+    } = req.query;
+
+    const andFilters = [];
+    if (q) {
+      andFilters.push({
+        OR: [
+          { title: containsFilter(q) },
+          { description: containsFilter(q) },
+          { brand: containsFilter(q) },
+          { model: containsFilter(q) },
+          { city: containsFilter(q) },
+          { neighborhood: containsFilter(q) },
+        ],
+      });
+    }
     if (brand) andFilters.push({ brand: containsFilter(brand) });
     if (model) andFilters.push({ model: containsFilter(model) });
     if (city) andFilters.push({ city: containsFilter(city) });
@@ -46,11 +143,43 @@ router.get('/', async (req, res) => {
     if (minYear || maxYear) andFilters.push({ year: { ...(minYear ? { gte: toNumber(minYear) } : {}), ...(maxYear ? { lte: toNumber(maxYear) } : {}) } });
     if (minKm || maxKm) andFilters.push({ km: { ...(minKm ? { gte: toNumber(minKm) } : {}), ...(maxKm ? { lte: toNumber(maxKm) } : {}) } });
     if (String(onlyWithPhoto) === 'true') andFilters.push({ images: { some: {} } });
-    andFilters.push(status ? { status } : { status: 'APPROVED' });
+    if (String(favoriteOnly) === 'true') {
+      if (!req.user) return res.status(401).json({ message: 'Faça login para ver seus favoritos.' });
+      andFilters.push({ favorites: { some: { userId: req.user.id } } });
+    }
 
-    const userId = req.headers['x-user-id'] ? Number(req.headers['x-user-id']) : null;
-    const listings = await prisma.listing.findMany({ where: { AND: andFilters }, include: includeConfig(userId), orderBy: buildOrderBy(sortBy) });
-    return res.json(listings.map(serializeListing));
+    if (req.user?.role === 'ADMIN' && status) andFilters.push({ status: String(status) });
+    else andFilters.push({ status: 'APPROVED' });
+
+    const where = { AND: andFilters };
+    const shouldPaginate = page || perPage;
+    const safePage = normalizePage(page, 1);
+    const safePerPage = normalizePerPage(perPage, 12, 48);
+
+    const [total, listings] = await Promise.all([
+      prisma.listing.count({ where }),
+      prisma.listing.findMany({
+        where,
+        include: includeConfig(req.user?.id || null),
+        orderBy: buildOrderBy(sortBy),
+        ...(shouldPaginate ? { skip: (safePage - 1) * safePerPage, take: safePerPage } : {}),
+      }),
+    ]);
+
+    const items = listings.map(serializeListing);
+    if (!shouldPaginate) return res.json(items);
+
+    return res.json({
+      items,
+      meta: {
+        page: safePage,
+        perPage: safePerPage,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / safePerPage)),
+        hasNextPage: safePage * safePerPage < total,
+        hasPrevPage: safePage > 1,
+      },
+    });
   } catch (error) {
     return res.status(500).json({ message: 'Erro ao listar anúncios.' });
   }
@@ -58,7 +187,12 @@ router.get('/', async (req, res) => {
 
 router.get('/mine', authRequired, async (req, res) => {
   try {
-    const listings = await prisma.listing.findMany({ where: { userId: req.user.id }, include: includeConfig(req.user.id), orderBy: [{ isFeatured: 'desc' }, { createdAt: 'desc' }] });
+    await runMarketplaceMaintenance();
+    const listings = await prisma.listing.findMany({
+      where: { userId: req.user.id },
+      include: includeConfig(req.user.id),
+      orderBy: [{ isFeatured: 'desc' }, { createdAt: 'desc' }],
+    });
     return res.json(listings.map(serializeListing));
   } catch {
     return res.status(500).json({ message: 'Erro ao listar seus anúncios.' });
@@ -70,7 +204,7 @@ router.get('/mine/leads', authRequired, async (req, res) => {
     const leads = await prisma.lead.findMany({
       where: { listing: { userId: req.user.id } },
       include: { listing: { select: { id: true, title: true, brand: true, model: true, city: true, phone: true, images: { orderBy: { sortOrder: 'asc' } } } } },
-      orderBy: { createdAt: 'desc' }
+      orderBy: { createdAt: 'desc' },
     });
     return res.json(leads);
   } catch {
@@ -93,12 +227,18 @@ router.patch('/leads/:id/status', authRequired, async (req, res) => {
   }
 });
 
-router.get('/:id', async (req, res) => {
+router.get('/:id', optionalAuth, async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] ? Number(req.headers['x-user-id']) : null;
-    const listing = await prisma.listing.findUnique({ where: { id: Number(req.params.id) }, include: includeConfig(userId) });
+    await runMarketplaceMaintenance();
+    const listing = await prisma.listing.findUnique({ where: { id: Number(req.params.id) }, include: includeConfig(req.user?.id || null) });
     if (!listing) return res.status(404).json({ message: 'Anúncio não encontrado.' });
-    if (listing.status !== 'APPROVED' && !userId) return res.status(403).json({ message: 'Anúncio indisponível.' });
+
+    const isOwner = req.user && listing.userId === req.user.id;
+    const isAdmin = req.user?.role === 'ADMIN';
+    if (listing.status !== 'APPROVED' && !isOwner && !isAdmin) {
+      return res.status(403).json({ message: 'Anúncio indisponível.' });
+    }
+
     return res.json(serializeListing(listing));
   } catch {
     return res.status(500).json({ message: 'Erro ao buscar anúncio.' });
@@ -107,21 +247,23 @@ router.get('/:id', async (req, res) => {
 
 router.post('/', authRequired, async (req, res) => {
   try {
-    const { title, description, price, brand, model, year, km, transmission, fuel, color, city, neighborhood, phone, images = [] } = req.body;
-    if (!title || !description || !price || !brand || !model || !year || !phone) return res.status(400).json({ message: 'Preencha os campos obrigatórios do anúncio.' });
-    if (!city || !neighborhood) return res.status(400).json({ message: 'Informe a localização do veículo.' });
-    if (!Array.isArray(images) || images.length === 0) return res.status(400).json({ message: 'Adicione pelo menos uma foto.' });
-    if (images.length > 15) return res.status(400).json({ message: 'O limite é de 15 fotos por anúncio.' });
+    await runMarketplaceMaintenance();
 
-    const activeSubscription = await prisma.subscription.findFirst({ where: { userId: req.user.id, status: 'ACTIVE' }, include: { plan: true }, orderBy: { startedAt: 'desc' } });
+    const imagesValidation = validateImagesPayload(req.body.images || []);
+    if (imagesValidation) return res.status(400).json({ message: imagesValidation });
+
+    const data = buildListingData(req.body);
+    const validationError = validateListingData(data);
+    if (validationError) return res.status(400).json({ message: validationError });
+
+    const { listingLimit } = await getListingLimitForUser(req.user.id);
     const activeListings = await prisma.listing.count({ where: { userId: req.user.id, status: { not: 'REJECTED' } } });
-    const listingLimit = activeSubscription?.plan?.listingLimit ?? 2;
     if (activeListings >= listingLimit) return res.status(400).json({ message: `Seu plano atual permite até ${listingLimit} anúncio(s) ativo(s).` });
 
-    const normalizedImages = choosePrimary(images.map((img) => ({ imageUrl: img.imageUrl, isPrimary: !!img.isPrimary })));
+    const normalizedImages = choosePrimary((req.body.images || []).map((img) => ({ imageUrl: String(img.imageUrl || '').trim(), isPrimary: !!img.isPrimary })));
     const listing = await prisma.listing.create({
-      data: { userId: req.user.id, title, description, price: toNumber(price), brand, model, year: toNumber(year), km: toNumber(km), transmission: transmission || '', fuel: fuel || '', color: color || '', city, neighborhood, phone, status: 'APPROVED', images: { create: normalizedImages } },
-      include: includeConfig(req.user.id)
+      data: { userId: req.user.id, ...data, phone: normalizePhone(data.phone) || data.phone, status: req.user.role === 'ADMIN' ? 'APPROVED' : 'PENDING', images: { create: normalizedImages } },
+      include: includeConfig(req.user.id),
     });
     return res.status(201).json(serializeListing(listing));
   } catch {
@@ -131,22 +273,29 @@ router.post('/', authRequired, async (req, res) => {
 
 router.put('/:id', authRequired, async (req, res) => {
   try {
+    await runMarketplaceMaintenance();
     const listingId = Number(req.params.id);
     const existing = await prisma.listing.findUnique({ where: { id: listingId }, include: { images: true } });
     if (!existing) return res.status(404).json({ message: 'Anúncio não encontrado.' });
     if (existing.userId !== req.user.id && req.user.role !== 'ADMIN') return res.status(403).json({ message: 'Sem permissão para editar este anúncio.' });
-    const { title, description, price, brand, model, year, km, transmission, fuel, color, city, neighborhood, phone, images = [] } = req.body;
-    if (!Array.isArray(images) || images.length === 0) return res.status(400).json({ message: 'Adicione pelo menos uma foto.' });
-    if (images.length > 15) return res.status(400).json({ message: 'O limite é de 15 fotos por anúncio.' });
-    if (!city || !neighborhood) return res.status(400).json({ message: 'Informe a localização do veículo.' });
 
-    const normalizedImages = choosePrimary(images.map((img) => ({ imageUrl: img.imageUrl, isPrimary: !!img.isPrimary })));
+    const imagesValidation = validateImagesPayload(req.body.images || []);
+    if (imagesValidation) return res.status(400).json({ message: imagesValidation });
+
+    const data = buildListingData(req.body);
+    const validationError = validateListingData(data);
+    if (validationError) return res.status(400).json({ message: validationError });
+
+    const normalizedImages = choosePrimary((req.body.images || []).map((img) => ({ imageUrl: String(img.imageUrl || '').trim(), isPrimary: !!img.isPrimary })));
+    const nextStatus = req.user.role === 'ADMIN' ? 'APPROVED' : 'PENDING';
+
     const updated = await prisma.$transaction(async (tx) => {
       await tx.listingImage.deleteMany({ where: { listingId } });
-      await tx.listing.update({ where: { id: listingId }, data: { title, description, price: toNumber(price), brand, model, year: toNumber(year), km: toNumber(km), transmission, fuel, color, city, neighborhood, phone, status: 'APPROVED' } });
+      await tx.listing.update({ where: { id: listingId }, data: { ...data, phone: normalizePhone(data.phone) || data.phone, status: nextStatus } });
       await tx.listingImage.createMany({ data: normalizedImages.map((img, index) => ({ ...img, listingId, sortOrder: index })) });
       return tx.listing.findUnique({ where: { id: listingId }, include: includeConfig(req.user.id) });
     });
+
     return res.json(serializeListing(updated));
   } catch {
     return res.status(500).json({ message: 'Erro ao atualizar anúncio.' });
@@ -168,6 +317,8 @@ router.delete('/:id', authRequired, async (req, res) => {
 
 router.post('/:id/favorite', authRequired, async (req, res) => {
   try {
+    const listing = await prisma.listing.findUnique({ where: { id: Number(req.params.id) } });
+    if (!listing || listing.status !== 'APPROVED') return res.status(404).json({ message: 'Anúncio não encontrado.' });
     await prisma.favorite.create({ data: { userId: req.user.id, listingId: Number(req.params.id) } });
     return res.status(201).json({ success: true });
   } catch {
@@ -188,9 +339,29 @@ router.post('/:id/lead', async (req, res) => {
   try {
     const { name, phone, message } = req.body;
     if (!name || !phone || !message) return res.status(400).json({ message: 'Preencha nome, telefone e mensagem.' });
+
     const listing = await prisma.listing.findUnique({ where: { id: Number(req.params.id) } });
-    if (!listing) return res.status(404).json({ message: 'Anúncio não encontrado.' });
-    const lead = await prisma.lead.create({ data: { listingId: Number(req.params.id), name, phone, message, status: 'NEW' } });
+    if (!listing || listing.status !== 'APPROVED') return res.status(404).json({ message: 'Anúncio não encontrado.' });
+
+    const normalizedPhone = normalizePhone(phone);
+    const duplicateLead = await prisma.lead.findFirst({
+      where: {
+        listingId: listing.id,
+        phone: normalizedPhone || phone,
+        createdAt: { gt: new Date(Date.now() - 1000 * 60 * 60 * 12) },
+      },
+    });
+    if (duplicateLead) return res.status(400).json({ message: 'Você já enviou interesse recentemente para este anúncio.' });
+
+    const lead = await prisma.lead.create({
+      data: {
+        listingId: listing.id,
+        name: sanitizeString(name, 120),
+        phone: normalizedPhone || sanitizeString(phone, 30),
+        message: sanitizeString(message, 1000),
+        status: 'NEW',
+      },
+    });
     return res.status(201).json(lead);
   } catch {
     return res.status(500).json({ message: 'Erro ao registrar interesse.' });

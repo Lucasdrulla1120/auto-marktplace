@@ -97,7 +97,7 @@ async function main() {
 
   await prisma.subscription.upsert({
     where: { externalRef: 'DEFAULT-PREMIUM-DEMO-001' },
-    update: { userId: premiumSeller.id, planId: premiumPlan.id, status: 'ACTIVE', paymentMethod: 'LOCAL_SIMULATION', expiresAt: null },
+    update: { userId: premiumSeller.id, planId: premiumPlan.id, status: 'ACTIVE', paymentMethod: 'LOCAL_SIMULATION', expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30) },
     create: {
       userId: premiumSeller.id,
       planId: premiumPlan.id,
@@ -105,7 +105,7 @@ async function main() {
       billingCycle: 'MONTHLY',
       paymentMethod: 'LOCAL_SIMULATION',
       startedAt: new Date(),
-      expiresAt: null,
+      expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30),
       externalRef: 'DEFAULT-PREMIUM-DEMO-001',
       mercadoPagoPayerEmail: premiumSeller.email,
     }
@@ -215,6 +215,7 @@ async function main() {
       provider: 'LOCAL_SIMULATION',
       externalRef: 'FEATURED-DEMO-001',
       description: 'Destaque demo de 7 dias',
+      durationDays: 7,
       paidAt: new Date(),
     });
   }

@@ -8,64 +8,73 @@ datasource db {
 }
 
 model User {
-  id            Int            @id @default(autoincrement())
-  name          String
-  email         String         @unique
-  phone         String
-  passwordHash  String
-  role          String         @default("USER")
-  companyName   String?
-  storeName     String?
-  storeLogoUrl  String?
-  storeBannerUrl String?
-  storeDescription String?
-  storeCity     String?
-  storeNeighborhood String?
-  storeWhatsapp String?
-  storeInstagram String?
-  storeWebsite  String?
-  storeIsActive Boolean        @default(false)
-  createdAt     DateTime       @default(now())
-  listings      Listing[]
-  favorites     Favorite[]
-  subscriptions Subscription[]
-  payments      Payment[]
-  buyerConversations Conversation[] @relation("BuyerConversations")
-  sellerConversations Conversation[] @relation("SellerConversations")
-  chatMessages   ChatMessage[]
+  id                 Int                   @id @default(autoincrement())
+  name               String
+  email              String                @unique
+  phone              String
+  passwordHash       String
+  role               String                @default("USER")
+  companyName        String?
+  storeName          String?
+  storeLogoUrl       String?
+  storeBannerUrl     String?
+  storeDescription   String?
+  storeCity          String?
+  storeNeighborhood  String?
+  storeWhatsapp      String?
+  storeInstagram     String?
+  storeWebsite       String?
+  storeIsActive      Boolean               @default(false)
+  createdAt          DateTime              @default(now())
+  listings           Listing[]
+  favorites          Favorite[]
+  subscriptions      Subscription[]
+  payments           Payment[]
+  buyerConversations Conversation[]        @relation("BuyerConversations")
+  sellerConversations Conversation[]       @relation("SellerConversations")
+  chatMessages       ChatMessage[]
   passwordResetTokens PasswordResetToken[]
-}
 
+  @@index([role, createdAt])
+}
 
 model Listing {
-  id             Int            @id @default(autoincrement())
-  userId         Int
-  title          String
-  description    String
-  price          Float
-  brand          String
-  model          String
-  year           Int
-  km             Int
-  transmission   String
-  fuel           String
-  color          String
-  city           String
-  neighborhood   String
-  phone          String
-  status         String         @default("PENDING")
-  isFeatured     Boolean        @default(false)
-  featuredUntil  DateTime?
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
-  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  images         ListingImage[]
-  favorites      Favorite[]
-  leads          Lead[]
-  payments       Payment[]
-  conversations  Conversation[]
-}
+  id            Int            @id @default(autoincrement())
+  userId        Int
+  title         String
+  description   String
+  price         Float
+  brand         String
+  model         String
+  year          Int
+  km            Int
+  transmission  String
+  fuel          String
+  color         String
+  city          String
+  neighborhood  String
+  phone         String
+  status        String         @default("PENDING")
+  isFeatured    Boolean        @default(false)
+  featuredUntil DateTime?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  images        ListingImage[]
+  favorites     Favorite[]
+  leads         Lead[]
+  payments      Payment[]
+  conversations Conversation[]
 
+  @@index([userId, status])
+  @@index([status, isFeatured, createdAt(sort: Desc)])
+  @@index([brand, model])
+  @@index([city, neighborhood])
+  @@index([price])
+  @@index([year])
+  @@index([km])
+  @@index([featuredUntil])
+}
 
 model ListingImage {
   id        Int      @id @default(autoincrement())
@@ -74,6 +83,8 @@ model ListingImage {
   isPrimary Boolean  @default(false)
   sortOrder Int      @default(0)
   listing   Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@index([listingId, sortOrder])
 }
 
 model Favorite {
@@ -85,6 +96,8 @@ model Favorite {
   listing   Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
 
   @@unique([userId, listingId])
+  @@index([userId, createdAt])
+  @@index([listingId, createdAt])
 }
 
 model Lead {
@@ -96,64 +109,75 @@ model Lead {
   status    String   @default("NEW")
   createdAt DateTime @default(now())
   listing   Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@index([listingId, status, createdAt])
 }
 
 model Plan {
-  id                Int            @id @default(autoincrement())
-  slug              String         @unique
-  name              String
-  priceMonthly      Float
-  listingLimit      Int
-  featuredSlots     Int            @default(0)
-  description       String
-  benefits          String?
-  displayOrder      Int            @default(0)
-  isRecommended     Boolean        @default(false)
-  isActive          Boolean        @default(true)
-  subscriptions     Subscription[]
-  createdAt         DateTime       @default(now())
+  id            Int            @id @default(autoincrement())
+  slug          String         @unique
+  name          String
+  priceMonthly  Float
+  listingLimit  Int
+  featuredSlots Int            @default(0)
+  description   String
+  benefits      String?
+  displayOrder  Int            @default(0)
+  isRecommended Boolean        @default(false)
+  isActive      Boolean        @default(true)
+  subscriptions Subscription[]
+  createdAt     DateTime       @default(now())
+
+  @@index([isActive, displayOrder])
 }
 
 model Subscription {
-  id                  Int      @id @default(autoincrement())
-  userId              Int
-  planId              Int
-  status              String   @default("ACTIVE")
-  billingCycle        String   @default("MONTHLY")
-  startedAt           DateTime @default(now())
-  expiresAt           DateTime?
-  paymentMethod       String   @default("MANUAL")
-  externalRef         String?  @unique
-  mercadoPagoPreapprovalId String?
-  mercadoPagoPayerEmail    String?
-  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  plan                Plan     @relation(fields: [planId], references: [id], onDelete: Restrict)
-  payments            Payment[]
+  id                        Int      @id @default(autoincrement())
+  userId                    Int
+  planId                    Int
+  status                    String   @default("ACTIVE")
+  billingCycle              String   @default("MONTHLY")
+  startedAt                 DateTime @default(now())
+  expiresAt                 DateTime?
+  paymentMethod             String   @default("MANUAL")
+  externalRef               String?  @unique
+  mercadoPagoPreapprovalId  String?
+  mercadoPagoPayerEmail     String?
+  user                      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan                      Plan     @relation(fields: [planId], references: [id], onDelete: Restrict)
+  payments                  Payment[]
+
+  @@index([userId, status, expiresAt])
 }
 
 model Payment {
-  id               Int      @id @default(autoincrement())
-  userId           Int
-  subscriptionId   Int?
-  listingId        Int?
-  type             String   @default("PLAN")
-  status           String   @default("PENDING")
-  amount           Float
-  currency         String   @default("BRL")
-  provider         String   @default("LOCAL")
-  providerRef      String?  @unique
-  externalRef      String   @unique
-  checkoutUrl      String?
-  pixCode          String?
-  pixQrBase64      String?
-  description      String?
-  paidAt           DateTime?
-  expiresAt        DateTime?
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  subscription     Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
-  listing          Listing? @relation(fields: [listingId], references: [id], onDelete: SetNull)
+  id             Int      @id @default(autoincrement())
+  userId         Int
+  subscriptionId Int?
+  listingId      Int?
+  type           String   @default("PLAN")
+  status         String   @default("PENDING")
+  amount         Float
+  currency       String   @default("BRL")
+  provider       String   @default("LOCAL")
+  providerRef    String?  @unique
+  externalRef    String   @unique
+  checkoutUrl    String?
+  pixCode        String?
+  pixQrBase64    String?
+  description    String?
+  durationDays   Int?
+  paidAt         DateTime?
+  expiresAt      DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subscription   Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  listing        Listing?      @relation(fields: [listingId], references: [id], onDelete: SetNull)
+
+  @@index([userId, status, createdAt])
+  @@index([subscriptionId])
+  @@index([listingId])
 }
 
 model WebhookEvent {
@@ -168,18 +192,17 @@ model WebhookEvent {
   createdAt      DateTime @default(now())
 }
 
-
 model Conversation {
-  id         Int          @id @default(autoincrement())
-  listingId   Int
-  buyerId    Int
-  sellerId   Int
-  createdAt  DateTime     @default(now())
-  updatedAt  DateTime     @updatedAt
-  listing    Listing      @relation(fields: [listingId], references: [id], onDelete: Cascade)
-  buyer      User         @relation("BuyerConversations", fields: [buyerId], references: [id], onDelete: Cascade)
-  seller     User         @relation("SellerConversations", fields: [sellerId], references: [id], onDelete: Cascade)
-  messages   ChatMessage[]
+  id           Int          @id @default(autoincrement())
+  listingId    Int
+  buyerId      Int
+  sellerId     Int
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  listing      Listing      @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  buyer        User         @relation("BuyerConversations", fields: [buyerId], references: [id], onDelete: Cascade)
+  seller       User         @relation("SellerConversations", fields: [sellerId], references: [id], onDelete: Cascade)
+  messages     ChatMessage[]
 
   @@unique([listingId, buyerId, sellerId])
 }
@@ -194,7 +217,6 @@ model ChatMessage {
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   sender         User         @relation(fields: [senderId], references: [id], onDelete: Cascade)
 }
-
 
 model PasswordResetToken {
   id        Int      @id @default(autoincrement())

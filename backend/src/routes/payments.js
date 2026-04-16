@@ -2,8 +2,43 @@ const express = require('express');
 const prisma = require('../utils/prisma');
 const { authRequired, adminRequired } = require('../middleware/auth');
 const { createPixPayment, makeExternalRef, verifyWebhookSignature, hasMercadoPagoConfig, getPaymentById, normalizePaymentStatus } = require('../utils/mercadoPago');
+const { addDays, runMarketplaceMaintenance, getCurrentSubscription } = require('../utils/marketplaceLifecycle');
 
 const router = express.Router();
+
+function getFeaturedPrice(days) {
+  const normalizedDays = [7, 15, 30].includes(Number(days)) ? Number(days) : 7;
+  const prices = { 7: 19.9, 15: 34.9, 30: 59.9 };
+  return { days: normalizedDays, amount: prices[normalizedDays] };
+}
+
+async function validateFeaturedEligibility(user, listing) {
+  if (user.role === 'ADMIN') return null;
+  const subscription = await getCurrentSubscription(user.id);
+  const featuredSlots = subscription?.plan?.featuredSlots ?? 0;
+
+  if (!subscription?.plan) {
+    return 'Você precisa de um plano ativo para destacar anúncios.';
+  }
+  if (featuredSlots <= 0) {
+    return `Seu plano ${subscription.plan.name} não inclui destaques simultâneos.`;
+  }
+
+  const activeFeaturedCount = await prisma.listing.count({
+    where: {
+      userId: user.id,
+      isFeatured: true,
+      OR: [{ featuredUntil: null }, { featuredUntil: { gt: new Date() } }],
+      status: 'APPROVED',
+    },
+  });
+
+  const alreadyFeaturedAndActive = !!(listing.isFeatured && (!listing.featuredUntil || listing.featuredUntil > new Date()));
+  if (!alreadyFeaturedAndActive && activeFeaturedCount >= featuredSlots) {
+    return `Seu plano permite ${featuredSlots} destaque(s) simultâneo(s). Remova um destaque antes de contratar outro.`;
+  }
+  return null;
+}
 
 async function activatePlanPayment(payment) {
   if (!payment?.subscriptionId) return null;
@@ -16,8 +51,11 @@ async function activatePlanPayment(payment) {
       id: { not: subscription.id },
       status: { in: ['ACTIVE', 'ACTIVATING', 'PENDING_PAYMENT', 'PAST_DUE'] },
     },
-    data: { status: 'SUPERSEDED' }
+    data: { status: 'SUPERSEDED' },
   });
+
+  const durationDays = payment.durationDays || 30;
+  const baseDate = subscription.expiresAt && subscription.expiresAt > new Date() ? subscription.expiresAt : new Date();
 
   return prisma.subscription.update({
     where: { id: subscription.id },
@@ -25,21 +63,28 @@ async function activatePlanPayment(payment) {
       status: 'ACTIVE',
       paymentMethod: payment.provider === 'MERCADO_PAGO' ? 'MERCADO_PAGO_PIX' : payment.provider,
       startedAt: subscription.startedAt || new Date(),
-      expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30),
+      expiresAt: addDays(baseDate, durationDays),
     },
-    include: { plan: true }
+    include: { plan: true },
   });
 }
 
 async function activateFeaturedPayment(payment) {
   if (!payment?.listingId) return null;
+  const listing = await prisma.listing.findUnique({ where: { id: payment.listingId } });
+  if (!listing) return null;
+
+  const durationDays = payment.durationDays || 7;
+  const baseDate = listing.featuredUntil && listing.featuredUntil > new Date() ? listing.featuredUntil : new Date();
+
   return prisma.listing.update({
     where: { id: payment.listingId },
-    data: { isFeatured: true, featuredUntil: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30) }
+    data: { isFeatured: true, featuredUntil: addDays(baseDate, durationDays) },
   });
 }
 
 async function syncPaymentStatus(paymentId) {
+  await runMarketplaceMaintenance();
   const payment = await prisma.payment.findUnique({ where: { id: Number(paymentId) }, include: { subscription: true, listing: true } });
   if (!payment) return null;
 
@@ -48,22 +93,18 @@ async function syncPaymentStatus(paymentId) {
 
   if (payment.provider === 'MERCADO_PAGO' && payment.providerRef && hasMercadoPagoConfig()) {
     const remote = await getPaymentById(payment.providerRef);
-    nextStatus = normalizePaymentStatus(remote.status);
-    paidAt = nextStatus === 'PAID' ? new Date(remote.date_approved || Date.now()) : null;
+    if (remote) {
+      nextStatus = normalizePaymentStatus(remote.status);
+      paidAt = nextStatus === 'PAID' ? new Date(remote.date_approved || Date.now()) : null;
+    }
+  } else if (payment.status === 'PENDING' && payment.expiresAt && payment.expiresAt < new Date()) {
+    nextStatus = 'EXPIRED';
   }
 
-  const updated = await prisma.payment.update({
-    where: { id: payment.id },
-    data: { status: nextStatus, paidAt }
-  });
+  const updated = await prisma.payment.update({ where: { id: payment.id }, data: { status: nextStatus, paidAt } });
 
-  if (updated.type === 'PLAN' && updated.status === 'PAID') {
-    await activatePlanPayment(updated);
-  }
-
-  if (updated.type === 'FEATURED' && updated.status === 'PAID') {
-    await activateFeaturedPayment(updated);
-  }
+  if (updated.type === 'PLAN' && updated.status === 'PAID') await activatePlanPayment(updated);
+  if (updated.type === 'FEATURED' && updated.status === 'PAID') await activateFeaturedPayment(updated);
 
   return updated;
 }
@@ -79,30 +120,34 @@ router.get('/config', (req, res) => {
 });
 
 router.get('/mine', authRequired, async (req, res) => {
+  await runMarketplaceMaintenance();
   const payments = await prisma.payment.findMany({
     where: { userId: req.user.id },
     include: {
       subscription: { include: { plan: true } },
-      listing: { select: { id: true, title: true } },
+      listing: { select: { id: true, title: true, status: true } },
     },
-    orderBy: { createdAt: 'desc' }
+    orderBy: { createdAt: 'desc' },
   });
   res.json(payments);
 });
 
 router.post('/feature-listing', authRequired, async (req, res) => {
+  await runMarketplaceMaintenance();
   const listingId = Number(req.body.listingId);
-  const days = Number(req.body.days || 7);
+  const featureOffer = getFeaturedPrice(req.body.days || 7);
   const listing = await prisma.listing.findUnique({ where: { id: listingId } });
   if (!listing) return res.status(404).json({ message: 'Anúncio não encontrado.' });
   if (listing.userId !== req.user.id && req.user.role !== 'ADMIN') return res.status(403).json({ message: 'Sem permissão para destacar este anúncio.' });
+  if (listing.status !== 'APPROVED' && req.user.role !== 'ADMIN') return res.status(400).json({ message: 'Somente anúncios aprovados podem receber destaque.' });
 
-  const prices = { 7: 19.9, 15: 34.9, 30: 59.9 };
-  const amount = prices[days] || prices[7];
+  const featuredEligibilityError = await validateFeaturedEligibility(req.user, listing);
+  if (featuredEligibilityError) return res.status(400).json({ message: featuredEligibilityError });
+
   const externalRef = makeExternalRef('FEATURED', listingId);
   const checkout = await createPixPayment({
-    amount,
-    description: `Destaque do anúncio ${listing.title} por ${days} dias`,
+    amount: featureOffer.amount,
+    description: `Destaque do anúncio ${listing.title} por ${featureOffer.days} dias`,
     payerEmail: req.user.email,
     externalRef,
   });
@@ -112,7 +157,7 @@ router.post('/feature-listing', authRequired, async (req, res) => {
       userId: req.user.id,
       listingId: listing.id,
       type: 'FEATURED',
-      amount,
+      amount: featureOffer.amount,
       status: normalizePaymentStatus(checkout.status),
       provider: checkout.provider,
       providerRef: checkout.providerRef || null,
@@ -120,12 +165,13 @@ router.post('/feature-listing', authRequired, async (req, res) => {
       checkoutUrl: checkout.checkoutUrl || null,
       pixCode: checkout.qrCode || null,
       pixQrBase64: checkout.qrCodeBase64 || null,
-      description: `Destaque do anúncio ${listing.title}`,
+      description: `Destaque do anúncio ${listing.title} por ${featureOffer.days} dias`,
+      durationDays: featureOffer.days,
       expiresAt: checkout.expiresAt || null,
-    }
+    },
   });
 
-  res.status(201).json({ payment, checkout, featureDays: days });
+  res.status(201).json({ payment, checkout, featureDays: featureOffer.days });
 });
 
 router.post('/webhook/mercadopago', async (req, res) => {
@@ -140,7 +186,7 @@ router.post('/webhook/mercadopago', async (req, res) => {
       payload: JSON.stringify(req.body),
       processed: false,
       processingNote: validSignature ? 'Recebido para processamento.' : 'Assinatura não validada.',
-    }
+    },
   });
 
   if (!validSignature) {
@@ -150,9 +196,7 @@ router.post('/webhook/mercadopago', async (req, res) => {
   try {
     if (externalId) {
       const localPayment = await prisma.payment.findFirst({ where: { providerRef: externalId } });
-      if (localPayment) {
-        await syncPaymentStatus(localPayment.id);
-      }
+      if (localPayment) await syncPaymentStatus(localPayment.id);
     }
 
     await prisma.webhookEvent.update({ where: { id: event.id }, data: { processed: true, processingNote: 'Evento processado com sucesso.' } });
@@ -164,13 +208,14 @@ router.post('/webhook/mercadopago', async (req, res) => {
 });
 
 router.get('/admin/all', authRequired, adminRequired, async (req, res) => {
+  await runMarketplaceMaintenance();
   const payments = await prisma.payment.findMany({
     include: {
       user: { select: { id: true, name: true, email: true } },
       subscription: { include: { plan: true } },
-      listing: { select: { id: true, title: true } },
+      listing: { select: { id: true, title: true, status: true } },
     },
-    orderBy: { createdAt: 'desc' }
+    orderBy: { createdAt: 'desc' },
   });
   res.json(payments);
 });
@@ -189,13 +234,8 @@ router.patch('/admin/:id/status', authRequired, adminRequired, async (req, res) 
   const normalized = normalizePaymentStatus(status);
   const payment = await prisma.payment.update({ where: { id: Number(req.params.id) }, data: { status: normalized, paidAt: normalized === 'PAID' ? new Date() : null } });
 
-  if (payment.type === 'FEATURED' && normalized === 'PAID') {
-    await activateFeaturedPayment(payment);
-  }
-
-  if (payment.type === 'PLAN' && normalized === 'PAID') {
-    await activatePlanPayment(payment);
-  }
+  if (payment.type === 'FEATURED' && normalized === 'PAID') await activateFeaturedPayment(payment);
+  if (payment.type === 'PLAN' && normalized === 'PAID') await activatePlanPayment(payment);
 
   res.json(payment);
 });

@@ -1,7 +1,8 @@
 const express = require('express');
 const prisma = require('../utils/prisma');
 const { authRequired, adminRequired } = require('../middleware/auth');
-const { createPixPayment, makeExternalRef, hasMercadoPagoConfig } = require('../utils/mercadoPago');
+const { createPixPayment, makeExternalRef, hasMercadoPagoConfig, normalizePaymentStatus } = require('../utils/mercadoPago');
+const { addDays, getCurrentSubscription, runMarketplaceMaintenance } = require('../utils/marketplaceLifecycle');
 
 const router = express.Router();
 
@@ -49,41 +50,41 @@ function validatePlanPayload(data, { requireSlug = true } = {}) {
 }
 
 router.get('/', async (req, res) => {
-  const plans = await prisma.plan.findMany({
-    where: { isActive: true },
-    orderBy: [{ displayOrder: 'asc' }, { priceMonthly: 'asc' }]
-  });
+  await runMarketplaceMaintenance();
+  const plans = await prisma.plan.findMany({ where: { isActive: true }, orderBy: [{ displayOrder: 'asc' }, { priceMonthly: 'asc' }] });
   res.json(plans);
 });
 
 router.get('/my-subscription', authRequired, async (req, res) => {
+  await runMarketplaceMaintenance();
   const subscription = await prisma.subscription.findFirst({
-    where: { userId: req.user.id, status: { in: ['ACTIVE', 'ACTIVATING', 'PENDING_PAYMENT', 'PAST_DUE'] } },
-    include: { plan: true, user: { select: { id: true, name: true, companyName: true, storeName: true, storeLogoUrl: true, storeBannerUrl: true, storeDescription: true, storeCity: true, storeNeighborhood: true, storeWhatsapp: true, storeInstagram: true, storeWebsite: true, storeIsActive: true } } },
-    orderBy: { startedAt: 'desc' }
+    where: {
+      userId: req.user.id,
+      status: { in: ['ACTIVE', 'ACTIVATING', 'PENDING_PAYMENT', 'PAST_DUE'] },
+      OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+    },
+    include: {
+      plan: true,
+      user: { select: { id: true, name: true, companyName: true, storeName: true, storeLogoUrl: true, storeBannerUrl: true, storeDescription: true, storeCity: true, storeNeighborhood: true, storeWhatsapp: true, storeInstagram: true, storeWebsite: true, storeIsActive: true } },
+    },
+    orderBy: { startedAt: 'desc' },
   });
   res.json(subscription);
 });
 
 router.post('/subscribe', authRequired, async (req, res) => {
+  await runMarketplaceMaintenance();
   const { planId } = req.body;
   const plan = await prisma.plan.findUnique({ where: { id: Number(planId) } });
   if (!plan || !plan.isActive) return res.status(404).json({ message: 'Plano não encontrado ou inativo.' });
 
-  const currentActiveSubscription = await prisma.subscription.findFirst({
-    where: { userId: req.user.id, status: { in: ['ACTIVE', 'ACTIVATING', 'PAST_DUE'] } },
-    include: { plan: true },
-    orderBy: { startedAt: 'desc' }
-  });
-
-  if (currentActiveSubscription?.planId === plan.id) {
-    return res.status(400).json({ message: 'Este já é o seu plano atual.' });
-  }
+  const currentActiveSubscription = await getCurrentSubscription(req.user.id);
+  if (currentActiveSubscription?.planId === plan.id) return res.status(400).json({ message: 'Este já é o seu plano atual.' });
 
   const existingPending = await prisma.subscription.findFirst({
-    where: { userId: req.user.id, planId: plan.id, status: 'PENDING_PAYMENT' },
+    where: { userId: req.user.id, planId: plan.id, status: 'PENDING_PAYMENT', OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
     include: { plan: true },
-    orderBy: { startedAt: 'desc' }
+    orderBy: { startedAt: 'desc' },
   });
 
   if (existingPending) {
@@ -99,7 +100,7 @@ router.post('/subscribe', authRequired, async (req, res) => {
         checkoutUrl: latestPayment.checkoutUrl,
         paymentId: latestPayment.id,
       } : null,
-      message: 'Você já possui um upgrade pendente para este plano.'
+      message: 'Você já possui um upgrade pendente para este plano.',
     });
   }
 
@@ -114,14 +115,12 @@ router.post('/subscribe', authRequired, async (req, res) => {
       externalRef,
       mercadoPagoPayerEmail: req.user.email,
       startedAt: new Date(),
-      expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30)
+      expiresAt: plan.priceMonthly > 0 ? addDays(new Date(), 30) : null,
     },
-    include: { plan: true }
+    include: { plan: true },
   });
 
-  if (plan.priceMonthly <= 0) {
-    return res.status(201).json({ subscription, checkout: null, message: 'Plano gratuito ativado.' });
-  }
+  if (plan.priceMonthly <= 0) return res.status(201).json({ subscription, checkout: null, message: 'Plano gratuito ativado.' });
 
   const checkout = await createPixPayment({
     amount: plan.priceMonthly,
@@ -135,7 +134,7 @@ router.post('/subscribe', authRequired, async (req, res) => {
       userId: req.user.id,
       subscriptionId: subscription.id,
       type: 'PLAN',
-      status: checkout.status?.toUpperCase?.() || 'PENDING',
+      status: normalizePaymentStatus(checkout.status),
       amount: plan.priceMonthly,
       provider: checkout.provider,
       providerRef: checkout.providerRef || null,
@@ -144,8 +143,9 @@ router.post('/subscribe', authRequired, async (req, res) => {
       pixCode: checkout.qrCode || null,
       pixQrBase64: checkout.qrCodeBase64 || null,
       description: `Cobrança do plano ${plan.name}`,
+      durationDays: 30,
       expiresAt: checkout.expiresAt || null,
-    }
+    },
   });
 
   res.status(201).json({
@@ -161,7 +161,7 @@ router.post('/subscribe', authRequired, async (req, res) => {
       pixQrBase64: checkout.qrCodeBase64 || null,
       amount: plan.priceMonthly,
       expiresAt: checkout.expiresAt || null,
-    }
+    },
   });
 });
 
@@ -214,16 +214,17 @@ router.delete('/admin/plans/:id', authRequired, adminRequired, async (req, res) 
 });
 
 router.get('/admin/subscriptions', authRequired, adminRequired, async (req, res) => {
+  await runMarketplaceMaintenance();
   const subscriptions = await prisma.subscription.findMany({
     include: { user: { select: { id: true, name: true, email: true } }, plan: true },
-    orderBy: { startedAt: 'desc' }
+    orderBy: { startedAt: 'desc' },
   });
   res.json(subscriptions);
 });
 
 router.patch('/admin/subscriptions/:id/status', authRequired, adminRequired, async (req, res) => {
   const { status } = req.body;
-  const allowed = ['PENDING_PAYMENT', 'ACTIVATING', 'ACTIVE', 'PAST_DUE', 'CANCELLED', 'SUPERSEDED'];
+  const allowed = ['PENDING_PAYMENT', 'ACTIVATING', 'ACTIVE', 'PAST_DUE', 'EXPIRED', 'CANCELLED', 'SUPERSEDED'];
   if (!allowed.includes(status)) return res.status(400).json({ message: 'Status inválido.' });
   const updated = await prisma.subscription.update({ where: { id: Number(req.params.id) }, data: { status }, include: { plan: true, user: true } });
   res.json(updated);

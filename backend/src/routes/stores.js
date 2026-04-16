@@ -1,15 +1,12 @@
 const express = require('express');
 const prisma = require('../utils/prisma');
 const { authRequired } = require('../middleware/auth');
+const { getCurrentSubscription, runMarketplaceMaintenance } = require('../utils/marketplaceLifecycle');
 
 const router = express.Router();
 
 async function getActiveSubscription(userId) {
-  return prisma.subscription.findFirst({
-    where: { userId, status: { in: ['ACTIVE', 'ACTIVATING', 'PENDING_PAYMENT', 'PAST_DUE'] } },
-    include: { plan: true },
-    orderBy: { startedAt: 'desc' }
-  });
+  return getCurrentSubscription(userId);
 }
 
 function canManageStore(subscription) {
@@ -18,10 +15,12 @@ function canManageStore(subscription) {
 }
 
 router.get('/', async (req, res) => {
+  await runMarketplaceMaintenance();
   const { q = '', city = '', neighborhood = '', plan = '' } = req.query;
   const subscriptions = await prisma.subscription.findMany({
     where: {
       status: 'ACTIVE',
+      OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
       plan: { slug: { in: plan ? [String(plan)] : ['lojista', 'premium'] } },
       user: { storeIsActive: true }
     },
@@ -32,7 +31,7 @@ router.get('/', async (req, res) => {
           id: true, name: true, phone: true, companyName: true,
           storeName: true, storeLogoUrl: true, storeBannerUrl: true, storeDescription: true,
           storeCity: true, storeNeighborhood: true, storeWhatsapp: true, storeInstagram: true,
-          storeWebsite: true, storeIsActive: true,
+          storeWebsite: true, storeIsActive: true, createdAt: true,
           _count: { select: { listings: { where: { status: 'APPROVED' } } } }
         }
       }
@@ -53,6 +52,7 @@ router.get('/', async (req, res) => {
       instagram: item.user.storeInstagram || '',
       website: item.user.storeWebsite || '',
       listingCount: item.user._count.listings || 0,
+      memberSince: item.user.createdAt,
       planSlug: item.plan.slug,
       planName: item.plan.name,
       isPremium: item.plan.slug === 'premium',
@@ -125,11 +125,11 @@ router.put('/me', authRequired, async (req, res) => {
   res.json(updated);
 });
 
-
 router.get('/:userId', async (req, res) => {
+  await runMarketplaceMaintenance();
   const userId = Number(req.params.userId);
   const subscription = await prisma.subscription.findFirst({
-    where: { userId, status: 'ACTIVE', plan: { slug: { in: ['lojista', 'premium'] } } },
+    where: { userId, status: 'ACTIVE', OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }], plan: { slug: { in: ['lojista', 'premium'] } } },
     include: { plan: true },
     orderBy: { startedAt: 'desc' }
   });
@@ -142,8 +142,9 @@ router.get('/:userId', async (req, res) => {
         where: { status: 'APPROVED' },
         include: {
           images: { orderBy: { sortOrder: 'asc' } },
-          user: { select: { id: true, name: true, companyName: true, phone: true } },
-          favorites: { select: { userId: true } }
+          user: { select: { id: true, name: true, companyName: true, phone: true, storeName: true, storeCity: true, storeNeighborhood: true, storeWhatsapp: true, storeIsActive: true, createdAt: true, _count: { select: { listings: true } } } },
+          favorites: { select: { userId: true } },
+          _count: { select: { favorites: true, leads: true } },
         },
         orderBy: [{ isFeatured: 'desc' }, { createdAt: 'desc' }]
       }
@@ -164,7 +165,23 @@ router.get('/:userId', async (req, res) => {
     website: user.storeWebsite || '',
     planSlug: subscription.plan.slug,
     planName: subscription.plan.name,
-    listings: user.listings.map((listing) => ({ ...listing, isFavorite: false, favoriteCount: listing.favorites?.length || 0 })),
+    listings: user.listings.map((listing) => ({
+      ...listing,
+      isFavorite: false,
+      favoriteCount: listing._count?.favorites || 0,
+      leadCount: listing._count?.leads || 0,
+      seller: {
+        id: listing.user?.id || null,
+        name: listing.user?.storeName || listing.user?.companyName || listing.user?.name || 'Loja',
+        type: 'LOJA',
+        memberSince: listing.user?.createdAt || null,
+        listingCount: listing.user?._count?.listings || 0,
+        city: listing.user?.storeCity || listing.city,
+        neighborhood: listing.user?.storeNeighborhood || listing.neighborhood,
+        whatsapp: listing.user?.storeWhatsapp || listing.phone,
+        storeIsActive: !!listing.user?.storeIsActive,
+      },
+    })),
   });
 });
 
