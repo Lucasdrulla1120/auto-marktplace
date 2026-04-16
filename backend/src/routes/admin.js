@@ -75,7 +75,12 @@ router.patch('/users/:id/store-verification', async (req, res) => {
   const current = await prisma.user.findUnique({ where: { id: userId } });
   if (!current) return res.status(404).json({ message: 'Usuário não encontrado.' });
 
-  const nextVerified = req.body.verified !== undefined ? !!req.body.verified : !current.storeIsVerified;
+  const nextVerified = req.body.verified !== undefined
+    ? !!req.body.verified
+    : req.body.storeIsVerified !== undefined
+      ? !!req.body.storeIsVerified
+      : !current.storeIsVerified;
+
   const updated = await prisma.user.update({
     where: { id: userId },
     data: {
@@ -94,6 +99,50 @@ router.patch('/users/:id/store-verification', async (req, res) => {
   });
 
   res.json(updated);
+});
+
+router.delete('/users/:id', async (req, res) => {
+  const userId = Number(req.params.id);
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(400).json({ message: 'Usuário inválido.' });
+  }
+
+  if (req.user.id === userId) {
+    return res.status(400).json({ message: 'Você não pode apagar o próprio usuário administrador.' });
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: {
+      id: true,
+      role: true,
+      name: true,
+      email: true,
+      _count: { select: { listings: true, favorites: true, subscriptions: true, payments: true } },
+    },
+  });
+
+  if (!user) return res.status(404).json({ message: 'Usuário não encontrado.' });
+
+  if (user.role === 'ADMIN') {
+    const adminCount = await prisma.user.count({ where: { role: 'ADMIN' } });
+    if (adminCount <= 1) {
+      return res.status(400).json({ message: 'Não é possível apagar o último administrador do sistema.' });
+    }
+  }
+
+  await prisma.user.delete({ where: { id: userId } });
+
+  return res.json({
+    message: 'Usuário apagado com sucesso. Anúncios, favoritos, pagamentos e demais vínculos foram removidos juntos.',
+    deletedUser: {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      listingCount: user._count.listings,
+    },
+  });
 });
 
 router.get('/listings', async (req, res) => {

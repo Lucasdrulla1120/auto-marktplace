@@ -1211,7 +1211,7 @@ function ChangePasswordCard({ onSubmit }) {
   );
 }
 
-function AdminPanel({ adminData, refreshAdmin, changeStatus, toggleFeature, updatePaymentStatus, updatePlan, createPlan, deletePlan, toggleStoreVerification }) {
+function AdminPanel({ adminData, refreshAdmin, changeStatus, toggleFeature, updatePaymentStatus, updatePlan, createPlan, deletePlan, toggleStoreVerification, deleteUser }) {
   const emptyPlan = { name: '', slug: '', priceMonthly: '', listingLimit: '', featuredSlots: '', displayOrder: '', isRecommended: false, isActive: true, description: '', benefits: '' };
   const [editingPlan, setEditingPlan] = useState(null);
   const [planForm, setPlanForm] = useState(emptyPlan);
@@ -1296,7 +1296,7 @@ function AdminPanel({ adminData, refreshAdmin, changeStatus, toggleFeature, upda
         </div>
       </section>
 
-      <section className="card"><div className="section-title"><div><h2>Usuários</h2><p>Gerencie usuários, lojas e acompanhe seus volumes.</p></div></div><div className="table-like">{(adminData.users || []).map((user) => <div key={user.id} className="table-row stacked-row"><div><strong>{user.name}</strong><span>{user.email} • {user.role} • {user.companyName || 'Sem empresa'}</span></div><div className="chip-row"><span>{user._count?.listings || 0} anúncio(s)</span>{user.storeIsActive && <span>Loja ativa</span>}{user.storeIsVerified && <span>Loja verificada</span>}{user.storeSlug && <span>/{user.storeSlug}</span>}</div><div className="actions-row wrap">{user.role !== 'ADMIN' && <button className={user.storeIsVerified ? 'ghost' : ''} onClick={() => toggleStoreVerification(user.id, !user.storeIsVerified)}>{user.storeIsVerified ? 'Remover verificação' : 'Verificar loja'}</button>}</div></div>)}{!(adminData.users || []).length && <p className="empty-inline">Nenhum usuário encontrado.</p>}</div></section>
+      <section className="card"><div className="section-title"><div><h2>Usuários</h2><p>Gerencie usuários, lojas e acompanhe seus volumes.</p></div></div><div className="table-like">{(adminData.users || []).map((user) => <div key={user.id} className="table-row stacked-row"><div><strong>{user.name}</strong><span>{user.email} • {user.role} • {user.companyName || 'Sem empresa'}</span></div><div className="chip-row"><span>{user._count?.listings || 0} anúncio(s)</span>{user.storeIsActive && <span>Loja ativa</span>}{user.storeIsVerified && <span>Loja verificada</span>}{user.storeSlug && <span>/{user.storeSlug}</span>}</div><div className="actions-row wrap">{user.role !== 'ADMIN' && <button className={user.storeIsVerified ? 'ghost' : ''} onClick={() => toggleStoreVerification(user.id, !user.storeIsVerified)}>{user.storeIsVerified ? 'Remover verificação' : 'Verificar loja'}</button>}{user.role !== 'ADMIN' && <button className="danger" onClick={() => deleteUser(user)}>Apagar usuário</button>}</div></div>)}{!(adminData.users || []).length && <p className="empty-inline">Nenhum usuário encontrado.</p>}</div></section>
 
       <section className="card">
         <div className="section-title"><div><h2>Anúncios do sistema</h2><p>O admin agora modera anúncios pendentes e controla destaques quando necessário.</p></div></div>
@@ -1983,6 +1983,22 @@ export default function App() {
     }
   };
 
+  const deleteUser = async (user) => {
+    if (!user?.id) return;
+    const listingCount = Number(user?._count?.listings || 0);
+    const confirmMessage = `Deseja apagar o usuário ${user.name}?${listingCount ? `\n\nOs ${listingCount} anúncio(s) desse usuário serão apagados junto com favoritos, leads, pagamentos e demais vínculos.` : '\n\nTodos os vínculos desse usuário serão apagados.'}`;
+    if (!window.confirm(confirmMessage)) return;
+
+    try {
+      const data = await api(`/admin/users/${user.id}`, { method: 'DELETE' }, auth.token);
+      setMessage(data.message || 'Usuário apagado com sucesso.');
+      if (selectedListing?.userId === user.id) setSelectedListing(null);
+      await Promise.all([fetchAdmin(), fetchListings(), fetchStores()]);
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
   const deletePlan = async (planId) => {
     try {
       await api(`/plans/admin/plans/${planId}`, { method: 'DELETE' }, auth.token);
@@ -2129,7 +2145,7 @@ export default function App() {
         )}
 
         {currentView === 'admin' && auth.user?.role === 'ADMIN' && (
-          <AdminPanel adminData={adminData} refreshAdmin={fetchAdmin} changeStatus={changeStatus} toggleFeature={toggleFeature} updatePaymentStatus={updatePaymentStatus} updatePlan={updatePlan} createPlan={createPlan} deletePlan={deletePlan} toggleStoreVerification={toggleStoreVerification} />
+          <AdminPanel adminData={adminData} refreshAdmin={fetchAdmin} changeStatus={changeStatus} toggleFeature={toggleFeature} updatePaymentStatus={updatePaymentStatus} updatePlan={updatePlan} createPlan={createPlan} deletePlan={deletePlan} toggleStoreVerification={toggleStoreVerification} deleteUser={deleteUser} />
         )}
 
         {currentView === 'lojas' && <StoresPage stores={stores} onOpenStore={openStore} />}
