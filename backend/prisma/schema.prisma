@@ -80,6 +80,13 @@ model ListingImage {
   id        Int      @id @default(autoincrement())
   listingId Int
   imageUrl  String
+  storageKey String?
+  fileName   String?
+  mimeType   String?
+  sizeBytes  Int?
+  width      Int?
+  height     Int?
+  bucket     String?
   isPrimary Boolean  @default(false)
   sortOrder Int      @default(0)
   listing   Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)

@@ -110,6 +110,20 @@ function validateListingData(data) {
   return null;
 }
 
+function normalizeImagePayload(images = []) {
+  return choosePrimary((images || []).map((img) => ({
+    imageUrl: String(img.imageUrl || '').trim(),
+    storageKey: String(img.storageKey || '').trim() || null,
+    fileName: String(img.fileName || '').trim() || null,
+    mimeType: String(img.mimeType || '').trim() || null,
+    sizeBytes: Number.isFinite(Number(img.sizeBytes)) ? Number(img.sizeBytes) : null,
+    width: Number.isFinite(Number(img.width)) ? Number(img.width) : null,
+    height: Number.isFinite(Number(img.height)) ? Number(img.height) : null,
+    bucket: String(img.bucket || '').trim() || null,
+    isPrimary: !!img.isPrimary,
+  })));
+}
+
 router.get('/', optionalAuth, async (req, res) => {
   try {
     await runMarketplaceMaintenance();
@@ -260,7 +274,7 @@ router.post('/', authRequired, async (req, res) => {
     const activeListings = await prisma.listing.count({ where: { userId: req.user.id, status: { not: 'REJECTED' } } });
     if (activeListings >= listingLimit) return res.status(400).json({ message: `Seu plano atual permite até ${listingLimit} anúncio(s) ativo(s).` });
 
-    const normalizedImages = choosePrimary((req.body.images || []).map((img) => ({ imageUrl: String(img.imageUrl || '').trim(), isPrimary: !!img.isPrimary })));
+    const normalizedImages = normalizeImagePayload(req.body.images || []);
     const listing = await prisma.listing.create({
       data: { userId: req.user.id, ...data, phone: normalizePhone(data.phone) || data.phone, status: req.user.role === 'ADMIN' ? 'APPROVED' : 'PENDING', images: { create: normalizedImages } },
       include: includeConfig(req.user.id),
@@ -286,7 +300,7 @@ router.put('/:id', authRequired, async (req, res) => {
     const validationError = validateListingData(data);
     if (validationError) return res.status(400).json({ message: validationError });
 
-    const normalizedImages = choosePrimary((req.body.images || []).map((img) => ({ imageUrl: String(img.imageUrl || '').trim(), isPrimary: !!img.isPrimary })));
+    const normalizedImages = normalizeImagePayload(req.body.images || []);
     const nextStatus = req.user.role === 'ADMIN' ? 'APPROVED' : 'PENDING';
 
     const updated = await prisma.$transaction(async (tx) => {

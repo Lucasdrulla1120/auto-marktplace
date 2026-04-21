@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { isSupabaseConfigured, uploadImageToSupabase } from './lib/supabase';
 
 const API_URL = (import.meta.env.VITE_API_URL || 'http://127.0.0.1:4000/api').replace(/\/$/, '');
 const MARKETPLACE_NAME = import.meta.env.VITE_MARKETPLACE_NAME || 'Local Marketplace';
@@ -174,52 +175,6 @@ async function api(path, options = {}, token = '') {
 
 function getPrimaryImage(images = []) {
   return images.find((img) => img.isPrimary) || images[0] || null;
-}
-
-function fileToDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
-
-function loadImageElement(src) {
-  return new Promise((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => resolve(image);
-    image.onerror = reject;
-    image.src = src;
-  });
-}
-
-async function optimizeImage(file, { maxWidth = 1600, maxHeight = 1200, quality = 0.82 } = {}) {
-  const originalDataUrl = await fileToDataUrl(file);
-  if (!String(file.type || '').startsWith('image/') || /gif|svg/i.test(file.type || '')) {
-    return originalDataUrl;
-  }
-
-  const image = await loadImageElement(originalDataUrl);
-  const ratio = Math.min(1, maxWidth / image.width, maxHeight / image.height);
-  const width = Math.max(1, Math.round(image.width * ratio));
-  const height = Math.max(1, Math.round(image.height * ratio));
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext('2d');
-  ctx.drawImage(image, 0, 0, width, height);
-  return canvas.toDataURL('image/jpeg', quality);
-}
-
-function readFilesAsDataUrl(files) {
-  return Promise.all(
-    Array.from(files).map(async (file) => ({
-      imageUrl: await optimizeImage(file),
-      fileName: file.name,
-      isPrimary: false,
-    }))
-  );
 }
 
 async function reverseGeocode(latitude, longitude) {
@@ -638,15 +593,16 @@ function DetailModal({ listing, auth, onClose, onToggleFavorite, refresh, relate
 function ListingForm({ auth, editing, onSaved, onCancel }) {
   const [form, setForm] = useState(editing ? {
     ...editing,
-    images: editing.images.map((img) => ({ imageUrl: img.imageUrl, isPrimary: img.isPrimary }))
+    images: editing.images.map((img) => ({ imageUrl: img.imageUrl, storageKey: img.storageKey, fileName: img.fileName, mimeType: img.mimeType, sizeBytes: img.sizeBytes, width: img.width, height: img.height, bucket: img.bucket, isPrimary: img.isPrimary }))
   } : { ...listingInitial, phone: auth.user?.phone || '' });
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const [uploadingPhotos, setUploadingPhotos] = useState(false);
   const [geoState, setGeoState] = useState({ loading: false, tried: false, message: '' });
 
   useEffect(() => {
     if (editing) {
-      setForm({ ...editing, images: editing.images.map((img) => ({ imageUrl: img.imageUrl, isPrimary: img.isPrimary })) });
+      setForm({ ...editing, images: editing.images.map((img) => ({ imageUrl: img.imageUrl, storageKey: img.storageKey, fileName: img.fileName, mimeType: img.mimeType, sizeBytes: img.sizeBytes, width: img.width, height: img.height, bucket: img.bucket, isPrimary: img.isPrimary })) });
     } else {
       setForm({ ...listingInitial, phone: auth.user?.phone || '' });
     }
@@ -686,18 +642,31 @@ function ListingForm({ auth, editing, onSaved, onCancel }) {
   const addPhotos = async (e) => {
     const files = e.target.files;
     if (!files?.length) return;
+    if (!isSupabaseConfigured()) {
+      setMessage('Configure o Supabase no frontend e backend para subir imagens.');
+      return;
+    }
     if (form.images.length + files.length > 15) {
       setMessage('O limite é de 15 fotos por anúncio.');
       return;
     }
-    const loaded = await readFilesAsDataUrl(files);
-    setForm((prev) => {
-      const next = [...prev.images, ...loaded];
-      if (!next.some((img) => img.isPrimary) && next[0]) next[0].isPrimary = true;
-      return { ...prev, images: next };
-    });
-    setMessage('');
-    e.target.value = '';
+
+    setUploadingPhotos(true);
+    setMessage('Enviando fotos para o Supabase Storage...');
+    try {
+      const loaded = await Promise.all(Array.from(files).map((file) => uploadImageToSupabase(file, { token: auth.token, folder: 'listings', listingId: editing?.id || null })));
+      setForm((prev) => {
+        const next = [...prev.images, ...loaded];
+        if (!next.some((img) => img.isPrimary) && next[0]) next[0].isPrimary = true;
+        return { ...prev, images: next };
+      });
+      setMessage('Fotos enviadas com sucesso.');
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setUploadingPhotos(false);
+      e.target.value = '';
+    }
   };
 
   const setPrimary = (index) => {
@@ -791,9 +760,9 @@ function ListingForm({ auth, editing, onSaved, onCancel }) {
         <div className="card upload-box">
           <label className="upload-label">
             <span>Adicionar fotos do dispositivo</span>
-            <input type="file" accept="image/*" multiple onChange={addPhotos} />
+            <input type="file" accept="image/*" multiple onChange={addPhotos} disabled={uploadingPhotos || loading} />
           </label>
-          <small>JPG, PNG ou WEBP. Máximo de 15 fotos. As imagens são otimizadas automaticamente para ficar mais leve no celular. Você pode escolher a principal e reorganizar a ordem.</small>
+          <small>JPG, PNG ou WEBP. Máximo de 15 fotos. As imagens são otimizadas e enviadas para o Supabase Storage, deixando o sistema mais leve e profissional para produção.</small>
           <div className="image-preview-grid">
             {form.images.map((img, index) => (
               <div key={`${img.imageUrl.slice(0, 30)}-${index}`} className={`preview-card ${img.isPrimary ? 'primary' : ''}`}>
@@ -810,7 +779,7 @@ function ListingForm({ auth, editing, onSaved, onCancel }) {
             ))}
           </div>
         </div>
-        <button type="submit" disabled={loading}>{loading ? 'Salvando...' : 'Salvar anúncio'}</button>
+        <button type="submit" disabled={loading || uploadingPhotos}>{loading ? 'Salvando...' : uploadingPhotos ? 'Enviando fotos...' : 'Salvar anúncio'}</button>
         {message && <p className="message">{message}</p>}
       </form>
     </section>
@@ -861,8 +830,13 @@ function Dashboard({ auth, listings, favorites, leads, subscription, plans, paym
 
   const loadStoreImage = async (field, files) => {
     if (!files?.length) return;
-    const [loaded] = await readFilesAsDataUrl(files);
-    if (loaded?.imageUrl) setStoreForm((prev) => ({ ...prev, [field]: loaded.imageUrl }));
+    if (!isSupabaseConfigured()) return;
+    try {
+      const uploaded = await uploadImageToSupabase(files[0], { token: auth.token, folder: 'stores' });
+      if (uploaded?.imageUrl) setStoreForm((prev) => ({ ...prev, [field]: uploaded.imageUrl }));
+    } catch (error) {
+      alert(error.message);
+    }
   };
 
   return (

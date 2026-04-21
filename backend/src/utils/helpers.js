@@ -1,3 +1,5 @@
+const { isAllowedSupabasePublicUrl } = require('./storage');
+
 function toNumber(value, fallback = 0) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -30,39 +32,22 @@ function isHttpUrl(value = '') {
   return /^https?:\/\//i.test(String(value || ''));
 }
 
-function isBase64Image(value = '') {
-  return /^data:image\/(png|jpeg|jpg|webp);base64,/i.test(String(value || ''));
-}
-
-function estimateImageBytes(imageUrl = '') {
-  const value = String(imageUrl || '');
-  if (isBase64Image(value)) {
-    const base64 = value.split(',')[1] || '';
-    return Math.ceil((base64.length * 3) / 4);
-  }
-  return 0;
-}
-
 function validateImagesPayload(images = []) {
   if (!Array.isArray(images) || images.length === 0) return 'Adicione pelo menos uma foto.';
   if (images.length > 15) return 'O limite é de 15 fotos por anúncio.';
 
-  const totalBytes = images.reduce((acc, item) => acc + estimateImageBytes(item.imageUrl), 0);
-
   for (const image of images) {
     const imageUrl = String(image?.imageUrl || '').trim();
     if (!imageUrl) return 'Todas as fotos precisam ter um endereço válido.';
-    if (!isHttpUrl(imageUrl) && !isBase64Image(imageUrl)) {
-      return 'Use imagens em URL pública ou em base64 data:image.';
+    if (!isHttpUrl(imageUrl)) return 'As fotos precisam estar hospedadas em URL pública HTTPS.';
+    if (process.env.SUPABASE_ALLOWED_HOSTS && !isAllowedSupabasePublicUrl(imageUrl)) {
+      return 'As fotos precisam vir do bucket público configurado no Supabase Storage.';
     }
-    const bytes = estimateImageBytes(imageUrl);
-    if (bytes > 3 * 1024 * 1024) {
-      return 'Cada foto deve ter no máximo aproximadamente 3 MB após otimização.';
-    }
-  }
 
-  if (totalBytes > 10 * 1024 * 1024) {
-    return 'O total das fotos ficou muito pesado. Envie imagens mais leves.';
+    const bytes = Number(image?.sizeBytes || 0);
+    if (bytes > 6 * 1024 * 1024) {
+      return 'Cada foto deve ter no máximo 6 MB após otimização.';
+    }
   }
 
   return null;

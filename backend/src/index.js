@@ -9,6 +9,7 @@ const adminRoutes = require('./routes/admin');
 const plansRoutes = require('./routes/plans');
 const paymentsRoutes = require('./routes/payments');
 const storesRoutes = require('./routes/stores');
+const storageRoutes = require('./routes/storage');
 
 const app = express();
 const PORT = Number(process.env.PORT || 4000);
@@ -44,7 +45,7 @@ app.get('/api/health', (req, res) => {
     status: 'ok',
     message: 'API online',
     timestamp: new Date().toISOString(),
-    version: 'v4.5.0-local-marketplace-regional-upgrade',
+    version: 'v4.6.0-supabase-storage',
   });
 });
 
@@ -54,6 +55,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/plans', plansRoutes);
 app.use('/api/payments', paymentsRoutes);
 app.use('/api/stores', storesRoutes);
+app.use('/api/storage', storageRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ message: 'Rota não encontrada.' });

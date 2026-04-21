@@ -2,6 +2,7 @@ const express = require('express');
 const prisma = require('../utils/prisma');
 const { authRequired } = require('../middleware/auth');
 const { getCurrentSubscription, runMarketplaceMaintenance } = require('../utils/marketplaceLifecycle');
+const { isAllowedSupabasePublicUrl } = require('../utils/storage');
 
 const router = express.Router();
 
@@ -111,6 +112,12 @@ router.put('/me', authRequired, async (req, res) => {
 
   if (!data.storeName) return res.status(400).json({ message: 'Informe o nome da loja.' });
   if (!data.storeCity) return res.status(400).json({ message: 'Informe a cidade da loja.' });
+  if (data.storeLogoUrl && process.env.SUPABASE_ALLOWED_HOSTS && !isAllowedSupabasePublicUrl(data.storeLogoUrl)) {
+    return res.status(400).json({ message: 'O logo precisa estar no Supabase Storage configurado.' });
+  }
+  if (data.storeBannerUrl && process.env.SUPABASE_ALLOWED_HOSTS && !isAllowedSupabasePublicUrl(data.storeBannerUrl)) {
+    return res.status(400).json({ message: 'O banner precisa estar no Supabase Storage configurado.' });
+  }
 
   const updated = await prisma.user.update({
     where: { id: req.user.id },
