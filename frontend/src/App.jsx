@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { isSupabaseConfigured, uploadImageToSupabase } from './lib/supabase';
 
 const API_URL = (import.meta.env.VITE_API_URL || 'http://127.0.0.1:4000/api').replace(/\/$/, '');
 const MARKETPLACE_NAME = import.meta.env.VITE_MARKETPLACE_NAME || 'Local Marketplace';
@@ -41,6 +40,9 @@ const SORT_OPTIONS = [
 const REGION_CITIES = ['Curitiba', 'São José dos Pinhais', 'Colombo', 'Pinhais', 'Araucária', 'Campo Largo', 'Almirante Tamandaré', 'Fazenda Rio Grande', 'Quatro Barras', 'Campina Grande do Sul'];
 const REGION_HIGHLIGHTS = ['Atendimento rápido por WhatsApp', 'Busca por cidade e bairro', 'Vitrine para lojas da região', 'Leads direto no painel'];
 const PROFILE_INITIAL = { name: '', email: '', phone: '', companyName: '', storeCity: '', storeNeighborhood: '' };
+const SUPABASE_URL = (import.meta.env.VITE_SUPABASE_URL || '').replace(/\/$/, '');
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+const SUPABASE_STORAGE_BUCKET = import.meta.env.VITE_SUPABASE_STORAGE_BUCKET || 'marketplace-media';
 
 const listingInitial = {
   title: '', description: '', price: '', brand: '', model: '', year: '', km: '',
@@ -175,6 +177,91 @@ async function api(path, options = {}, token = '') {
 
 function getPrimaryImage(images = []) {
   return images.find((img) => img.isPrimary) || images[0] || null;
+}
+
+function isSupabaseConfigured() {
+  return Boolean(SUPABASE_URL && SUPABASE_ANON_KEY && API_URL);
+}
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function loadImageElement(src) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+    image.src = src;
+  });
+}
+
+async function compressImageForUpload(file, { maxWidth = 1600, maxHeight = 1200, quality = 0.82 } = {}) {
+  const originalDataUrl = await fileToDataUrl(file);
+  if (!String(file.type || '').startsWith('image/') || /gif|svg/i.test(file.type || '')) {
+    return { fileToUpload: file, contentType: file.type || 'application/octet-stream', width: null, height: null };
+  }
+
+  const image = await loadImageElement(originalDataUrl);
+  const ratio = Math.min(1, maxWidth / image.width, maxHeight / image.height);
+  const width = Math.max(1, Math.round(image.width * ratio));
+  const height = Math.max(1, Math.round(image.height * ratio));
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(image, 0, 0, width, height);
+  const blob = await new Promise((resolve, reject) => {
+    canvas.toBlob((result) => {
+      if (result) return resolve(result);
+      return reject(new Error('Não foi possível otimizar a imagem.'));
+    }, 'image/webp', quality);
+  });
+  const baseName = String(file.name || 'imagem').replace(/\.[^.]+$/, '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-zA-Z0-9-_]+/g, '-').replace(/^-+|-+$/g, '') || 'imagem';
+  const nextFile = new File([blob], `${baseName}.webp`, { type: 'image/webp' });
+  return { fileToUpload: nextFile, contentType: 'image/webp', width, height };
+}
+
+async function requestSignedUpload({ token, folder, fileName, contentType, fileSize, listingId = null }) {
+  const response = await fetch(`${API_URL}/storage/sign-upload`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ folder, fileName, contentType, fileSize, listingId }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.message || 'Não foi possível preparar o upload.');
+  return data;
+}
+
+async function uploadImageToSupabase(file, { token, folder = 'listings', listingId = null } = {}) {
+  if (!token) throw new Error('Sessão inválida para upload. Faça login novamente.');
+  if (!isSupabaseConfigured()) throw new Error('Supabase não configurado no frontend.');
+  const optimized = await compressImageForUpload(file, folder === 'stores' ? { maxWidth: 2000, maxHeight: 1200, quality: 0.84 } : { maxWidth: 1600, maxHeight: 1200, quality: 0.82 });
+  const signed = await requestSignedUpload({ token, folder, fileName: optimized.fileToUpload.name, contentType: optimized.contentType, fileSize: optimized.fileToUpload.size, listingId });
+  const uploadUrl = `${SUPABASE_URL}/storage/v1/object/upload/sign/${signed.bucket}/${signed.path}?token=${encodeURIComponent(signed.token)}`;
+  const response = await fetch(uploadUrl, {
+    method: 'PUT',
+    headers: { 'Content-Type': optimized.contentType, apikey: SUPABASE_ANON_KEY },
+    body: optimized.fileToUpload,
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.message || result.error || 'Falha ao enviar a imagem para o Supabase Storage.');
+  return {
+    imageUrl: signed.publicUrl,
+    storageKey: signed.path,
+    fileName: optimized.fileToUpload.name,
+    mimeType: optimized.contentType,
+    sizeBytes: optimized.fileToUpload.size,
+    width: optimized.width,
+    height: optimized.height,
+    bucket: signed.bucket,
+    isPrimary: false,
+  };
 }
 
 async function reverseGeocode(latitude, longitude) {
@@ -650,9 +737,8 @@ function ListingForm({ auth, editing, onSaved, onCancel }) {
       setMessage('O limite é de 15 fotos por anúncio.');
       return;
     }
-
     setUploadingPhotos(true);
-    setMessage('Enviando fotos para o Supabase Storage...');
+    setMessage('Enviando fotos...');
     try {
       const loaded = await Promise.all(Array.from(files).map((file) => uploadImageToSupabase(file, { token: auth.token, folder: 'listings', listingId: editing?.id || null })));
       setForm((prev) => {
@@ -762,7 +848,7 @@ function ListingForm({ auth, editing, onSaved, onCancel }) {
             <span>Adicionar fotos do dispositivo</span>
             <input type="file" accept="image/*" multiple onChange={addPhotos} disabled={uploadingPhotos || loading} />
           </label>
-          <small>JPG, PNG ou WEBP. Máximo de 15 fotos. As imagens são otimizadas e enviadas para o Supabase Storage, deixando o sistema mais leve e profissional para produção.</small>
+          <small>JPG, PNG ou WEBP. Máximo de 15 fotos. As imagens são otimizadas e enviadas para o Supabase Storage, deixando o sistema mais leve e robusto.</small>
           <div className="image-preview-grid">
             {form.images.map((img, index) => (
               <div key={`${img.imageUrl.slice(0, 30)}-${index}`} className={`preview-card ${img.isPrimary ? 'primary' : ''}`}>

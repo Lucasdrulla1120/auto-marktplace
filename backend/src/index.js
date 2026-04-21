@@ -45,7 +45,7 @@ app.get('/api/health', (req, res) => {
     status: 'ok',
     message: 'API online',
     timestamp: new Date().toISOString(),
-    version: 'v4.6.0-supabase-storage',
+    version: 'v4.5.1-supabase-storage',
   });
 });
 

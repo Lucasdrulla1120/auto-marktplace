@@ -110,20 +110,6 @@ function validateListingData(data) {
   return null;
 }
 
-function normalizeImagePayload(images = []) {
-  return choosePrimary((images || []).map((img) => ({
-    imageUrl: String(img.imageUrl || '').trim(),
-    storageKey: String(img.storageKey || '').trim() || null,
-    fileName: String(img.fileName || '').trim() || null,
-    mimeType: String(img.mimeType || '').trim() || null,
-    sizeBytes: Number.isFinite(Number(img.sizeBytes)) ? Number(img.sizeBytes) : null,
-    width: Number.isFinite(Number(img.width)) ? Number(img.width) : null,
-    height: Number.isFinite(Number(img.height)) ? Number(img.height) : null,
-    bucket: String(img.bucket || '').trim() || null,
-    isPrimary: !!img.isPrimary,
-  })));
-}
-
 router.get('/', optionalAuth, async (req, res) => {
   try {
     await runMarketplaceMaintenance();

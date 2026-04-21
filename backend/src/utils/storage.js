@@ -15,7 +15,7 @@ function isAllowedSupabasePublicUrl(value = '') {
 
   try {
     const url = new URL(raw);
-    if (url.protocol !== 'https:') return false;
+    if (!/^https?:$/i.test(url.protocol)) return false;
     const allowedHosts = getAllowedStorageHosts();
     if (allowedHosts.length > 0 && !allowedHosts.includes(url.hostname.toLowerCase())) {
       return false;
@@ -26,6 +26,17 @@ function isAllowedSupabasePublicUrl(value = '') {
   }
 }
 
+function hasSupabaseStorageConfig() {
+  return Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY && process.env.SUPABASE_STORAGE_BUCKET);
+}
+
+function getPublicStorageUrl(bucket, path) {
+  const base = String(process.env.SUPABASE_URL || '').replace(/\/$/, '');
+  return `${base}/storage/v1/object/public/${bucket}/${path}`;
+}
+
 module.exports = {
   isAllowedSupabasePublicUrl,
+  hasSupabaseStorageConfig,
+  getPublicStorageUrl,
 };

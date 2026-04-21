@@ -1,7 +1,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const { authRequired } = require('../middleware/auth');
-const { hasSupabaseStorageConfig, getSupabaseAdmin } = require('../utils/supabase');
+const { hasSupabaseStorageConfig, getPublicStorageUrl } = require('../utils/storage');
 
 const router = express.Router();
 
@@ -25,6 +25,24 @@ function buildStoragePath({ folder, userId, fileName, listingId = null }) {
   parts.push(`${yyyy}-${mm}`);
   parts.push(`${crypto.randomUUID()}-${base}.${ext || 'bin'}`);
   return parts.join('/');
+}
+
+async function createSignedUploadUrl({ bucket, path }) {
+  const base = String(process.env.SUPABASE_URL || '').replace(/\/$/, '');
+  const response = await fetch(`${base}/storage/v1/object/upload/sign/${bucket}/${path}`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+      apikey: process.env.SUPABASE_SERVICE_ROLE_KEY,
+      'Content-Type': 'application/json',
+    },
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.message || payload.error || 'Não foi possível gerar URL assinada para upload.');
+  }
+  return payload;
 }
 
 router.post('/sign-upload', authRequired, async (req, res) => {
@@ -51,24 +69,17 @@ router.post('/sign-upload', authRequired, async (req, res) => {
 
     const bucket = process.env.SUPABASE_STORAGE_BUCKET || 'marketplace-media';
     const path = buildStoragePath({ folder, userId: req.user.id, fileName, listingId });
-    const supabase = getSupabaseAdmin();
-    const { data, error } = await supabase.storage.from(bucket).createSignedUploadUrl(path);
-
-    if (error || !data?.token) {
-      return res.status(500).json({ message: error?.message || 'Não foi possível gerar URL assinada para upload.' });
-    }
-
-    const { data: publicData } = supabase.storage.from(bucket).getPublicUrl(path);
+    const signed = await createSignedUploadUrl({ bucket, path });
 
     return res.json({
       bucket,
       path,
-      token: data.token,
-      publicUrl: publicData.publicUrl,
+      token: signed.token,
+      publicUrl: getPublicStorageUrl(bucket, path),
       expiresInSeconds: 7200,
     });
   } catch (error) {
-    return res.status(500).json({ message: 'Erro ao preparar upload.' });
+    return res.status(500).json({ message: error.message || 'Erro ao preparar upload.' });
   }
 });
 
