@@ -27,7 +27,7 @@ function buildStoragePath({ folder, userId, fileName, listingId = null }) {
   return parts.join('/');
 }
 
-async function createSignedUploadUrl({ bucket, path }) {
+async function createSignedUploadUrl({ bucket, path, contentType }) {
   const base = String(process.env.SUPABASE_URL || '').replace(/\/$/, '');
   const response = await fetch(`${base}/storage/v1/object/upload/sign/${bucket}/${path}`, {
     method: 'POST',
@@ -36,6 +36,10 @@ async function createSignedUploadUrl({ bucket, path }) {
       apikey: process.env.SUPABASE_SERVICE_ROLE_KEY,
       'Content-Type': 'application/json',
     },
+    body: JSON.stringify({
+      contentType,
+      upsert: false,
+    }),
   });
 
   const payload = await response.json().catch(() => ({}));
@@ -69,7 +73,7 @@ router.post('/sign-upload', authRequired, async (req, res) => {
 
     const bucket = process.env.SUPABASE_STORAGE_BUCKET || 'marketplace-media';
     const path = buildStoragePath({ folder, userId: req.user.id, fileName, listingId });
-    const signed = await createSignedUploadUrl({ bucket, path });
+    const signed = await createSignedUploadUrl({ bucket, path, contentType });
 
     return res.json({
       bucket,
