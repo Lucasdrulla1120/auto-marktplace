@@ -43,6 +43,21 @@ function estimateImageBytes(imageUrl = '') {
   return 0;
 }
 
+function normalizeImagePayload(images = []) {
+  return choosePrimary(Array.isArray(images) ? images : []).map((image, index) => ({
+    imageUrl: sanitizeString(image?.imageUrl, 2000),
+    storageKey: sanitizeString(image?.storageKey, 500) || null,
+    fileName: sanitizeString(image?.fileName, 255) || null,
+    mimeType: sanitizeString(image?.mimeType, 120) || null,
+    sizeBytes: Number.isFinite(Number(image?.sizeBytes)) ? Number(image.sizeBytes) : null,
+    width: Number.isFinite(Number(image?.width)) ? Number(image.width) : null,
+    height: Number.isFinite(Number(image?.height)) ? Number(image.height) : null,
+    bucket: sanitizeString(image?.bucket, 120) || null,
+    isPrimary: !!image?.isPrimary,
+    sortOrder: index,
+  }));
+}
+
 function validateImagesPayload(images = []) {
   if (!Array.isArray(images) || images.length === 0) return 'Adicione pelo menos uma foto.';
   if (images.length > 15) return 'O limite é de 15 fotos por anúncio.';
@@ -85,6 +100,7 @@ module.exports = {
   choosePrimary,
   sanitizeString,
   normalizePhone,
+  normalizeImagePayload,
   validateImagesPayload,
   normalizePage,
   normalizePerPage,

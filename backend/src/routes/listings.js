@@ -7,10 +7,12 @@ const {
   sanitizeString,
   normalizePhone,
   validateImagesPayload,
+  normalizeImagePayload,
   normalizePage,
   normalizePerPage,
 } = require('../utils/helpers');
 const { runMarketplaceMaintenance, getListingLimitForUser } = require('../utils/marketplaceLifecycle');
+const { isAllowedSupabasePublicUrl, getStorageObjectPathFromPublicUrl, removeStorageObjects } = require('../utils/storage');
 
 const router = express.Router();
 
@@ -97,6 +99,27 @@ function buildListingData(payload = {}) {
     neighborhood: sanitizeString(payload.neighborhood, 80),
     phone: sanitizeString(payload.phone, 30),
   };
+}
+
+
+function validateSupabaseImages(images = []) {
+  if (!process.env.SUPABASE_ALLOWED_HOSTS) return null;
+  for (const image of images) {
+    if (!isAllowedSupabasePublicUrl(image.imageUrl)) {
+      return 'As fotos do anúncio precisam estar no Supabase Storage configurado.';
+    }
+  }
+  return null;
+}
+
+function collectStorageObjectsFromImages(images = []) {
+  return (Array.isArray(images) ? images : [])
+    .map((image) => {
+      const bucket = image?.bucket || process.env.SUPABASE_STORAGE_BUCKET || 'marketplace-media';
+      const path = image?.storageKey || getStorageObjectPathFromPublicUrl(image?.imageUrl || '')?.path;
+      return path ? { bucket, path } : null;
+    })
+    .filter(Boolean);
 }
 
 function validateListingData(data) {
@@ -261,13 +284,21 @@ router.post('/', authRequired, async (req, res) => {
     if (activeListings >= listingLimit) return res.status(400).json({ message: `Seu plano atual permite até ${listingLimit} anúncio(s) ativo(s).` });
 
     const normalizedImages = normalizeImagePayload(req.body.images || []);
-    const listing = await prisma.listing.create({
-      data: { userId: req.user.id, ...data, phone: normalizePhone(data.phone) || data.phone, status: req.user.role === 'ADMIN' ? 'APPROVED' : 'PENDING', images: { create: normalizedImages } },
-      include: includeConfig(req.user.id),
-    });
-    return res.status(201).json(serializeListing(listing));
-  } catch {
-    return res.status(500).json({ message: 'Erro ao criar anúncio.' });
+    const imagesError = validateSupabaseImages(normalizedImages);
+    if (imagesError) return res.status(400).json({ message: imagesError });
+
+    try {
+      const listing = await prisma.listing.create({
+        data: { userId: req.user.id, ...data, phone: normalizePhone(data.phone) || data.phone, status: req.user.role === 'ADMIN' ? 'APPROVED' : 'PENDING', images: { create: normalizedImages.map((img, index) => ({ imageUrl: img.imageUrl, isPrimary: !!img.isPrimary, sortOrder: index })) } },
+        include: includeConfig(req.user.id),
+      });
+      return res.status(201).json(serializeListing(listing));
+    } catch (error) {
+      await removeStorageObjects(collectStorageObjectsFromImages(normalizedImages)).catch(() => null);
+      return res.status(500).json({ message: error.message || 'Erro ao criar anúncio.' });
+    }
+  } catch (error) {
+    return res.status(500).json({ message: error.message || 'Erro ao criar anúncio.' });
   }
 });
 
@@ -287,31 +318,39 @@ router.put('/:id', authRequired, async (req, res) => {
     if (validationError) return res.status(400).json({ message: validationError });
 
     const normalizedImages = normalizeImagePayload(req.body.images || []);
+    const imagesError = validateSupabaseImages(normalizedImages);
+    if (imagesError) return res.status(400).json({ message: imagesError });
     const nextStatus = req.user.role === 'ADMIN' ? 'APPROVED' : 'PENDING';
+    const existingObjects = collectStorageObjectsFromImages(existing.images);
+    const nextKeys = new Set(collectStorageObjectsFromImages(normalizedImages).map((item) => `${item.bucket}:${item.path}`));
+    const objectsToDelete = existingObjects.filter((item) => !nextKeys.has(`${item.bucket}:${item.path}`));
 
     const updated = await prisma.$transaction(async (tx) => {
       await tx.listingImage.deleteMany({ where: { listingId } });
       await tx.listing.update({ where: { id: listingId }, data: { ...data, phone: normalizePhone(data.phone) || data.phone, status: nextStatus } });
-      await tx.listingImage.createMany({ data: normalizedImages.map((img, index) => ({ ...img, listingId, sortOrder: index })) });
+      await tx.listingImage.createMany({ data: normalizedImages.map((img, index) => ({ imageUrl: img.imageUrl, isPrimary: !!img.isPrimary, listingId, sortOrder: index })) });
       return tx.listing.findUnique({ where: { id: listingId }, include: includeConfig(req.user.id) });
     });
 
+    await removeStorageObjects(objectsToDelete).catch(() => null);
     return res.json(serializeListing(updated));
-  } catch {
-    return res.status(500).json({ message: 'Erro ao atualizar anúncio.' });
+  } catch (error) {
+    return res.status(500).json({ message: error.message || 'Erro ao atualizar anúncio.' });
   }
 });
 
 router.delete('/:id', authRequired, async (req, res) => {
   try {
     const listingId = Number(req.params.id);
-    const existing = await prisma.listing.findUnique({ where: { id: listingId } });
+    const existing = await prisma.listing.findUnique({ where: { id: listingId }, include: { images: true } });
     if (!existing) return res.status(404).json({ message: 'Anúncio não encontrado.' });
     if (existing.userId !== req.user.id && req.user.role !== 'ADMIN') return res.status(403).json({ message: 'Sem permissão para excluir este anúncio.' });
+    const objectsToDelete = collectStorageObjectsFromImages(existing.images);
     await prisma.listing.delete({ where: { id: listingId } });
+    await removeStorageObjects(objectsToDelete).catch(() => null);
     return res.json({ success: true });
-  } catch {
-    return res.status(500).json({ message: 'Erro ao excluir anúncio.' });
+  } catch (error) {
+    return res.status(500).json({ message: error.message || 'Erro ao excluir anúncio.' });
   }
 });
 
