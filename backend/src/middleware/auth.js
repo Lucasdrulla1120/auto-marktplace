@@ -5,7 +5,8 @@ async function resolveUserFromToken(token) {
   if (!token) return null;
   const decoded = jwt.verify(token, process.env.JWT_SECRET);
   const user = await prisma.user.findUnique({ where: { id: decoded.userId } });
-  return user || null;
+  if (!user || user.role === 'BANNED') return null;
+  return user;
 }
 
 function getBearerToken(req) {

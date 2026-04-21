@@ -289,7 +289,7 @@ router.post('/', authRequired, async (req, res) => {
 
     try {
       const listing = await prisma.listing.create({
-        data: { userId: req.user.id, ...data, phone: normalizePhone(data.phone) || data.phone, status: req.user.role === 'ADMIN' ? 'APPROVED' : 'PENDING', images: { create: normalizedImages.map((img, index) => ({ imageUrl: img.imageUrl, isPrimary: !!img.isPrimary, sortOrder: index })) } },
+        data: { userId: req.user.id, ...data, phone: normalizePhone(data.phone) || data.phone, status: 'APPROVED', images: { create: normalizedImages.map((img, index) => ({ imageUrl: img.imageUrl, isPrimary: !!img.isPrimary, sortOrder: index })) } },
         include: includeConfig(req.user.id),
       });
       return res.status(201).json(serializeListing(listing));
@@ -320,7 +320,7 @@ router.put('/:id', authRequired, async (req, res) => {
     const normalizedImages = normalizeImagePayload(req.body.images || []);
     const imagesError = validateSupabaseImages(normalizedImages);
     if (imagesError) return res.status(400).json({ message: imagesError });
-    const nextStatus = req.user.role === 'ADMIN' ? 'APPROVED' : 'PENDING';
+    const nextStatus = 'APPROVED';
     const existingObjects = collectStorageObjectsFromImages(existing.images);
     const nextKeys = new Set(collectStorageObjectsFromImages(normalizedImages).map((item) => `${item.bucket}:${item.path}`));
     const objectsToDelete = existingObjects.filter((item) => !nextKeys.has(`${item.bucket}:${item.path}`));

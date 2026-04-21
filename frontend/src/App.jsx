@@ -1148,7 +1148,7 @@ function ChangePasswordCard({ onSubmit }) {
   );
 }
 
-function AdminPanel({ adminData, refreshAdmin, changeStatus, toggleFeature, updatePaymentStatus, updatePlan, createPlan, deletePlan }) {
+function AdminPanel({ adminData, refreshAdmin, changeStatus, toggleFeature, updatePaymentStatus, updatePlan, createPlan, deletePlan, banUser }) {
   const emptyPlan = { name: '', slug: '', priceMonthly: '', listingLimit: '', featuredSlots: '', displayOrder: '', isRecommended: false, isActive: true, description: '', benefits: '' };
   const [editingPlan, setEditingPlan] = useState(null);
   const [planForm, setPlanForm] = useState(emptyPlan);
@@ -1179,10 +1179,9 @@ function AdminPanel({ adminData, refreshAdmin, changeStatus, toggleFeature, upda
       <section className="card admin-stats">
         <div><strong>{adminData.dashboard.users}</strong><span>Usuários</span></div>
         <div><strong>{adminData.dashboard.listings}</strong><span>Anúncios</span></div>
-        <div><strong>{adminData.dashboard.pending}</strong><span>Pendentes</span></div>
-        <div><strong>{adminData.dashboard.leads}</strong><span>Leads</span></div>
         <div><strong>{adminData.dashboard.featured || 0}</strong><span>Destaques</span></div>
         <div><strong>{adminData.dashboard.activeSubscriptions || 0}</strong><span>Assinaturas ativas</span></div>
+        <div><strong>{adminData.dashboard.bannedUsers || 0}</strong><span>Banidos</span></div>
       </section>
 
       <section className="card">
@@ -1230,18 +1229,17 @@ function AdminPanel({ adminData, refreshAdmin, changeStatus, toggleFeature, upda
         </div>
       </section>
 
-      <section className="card"><div className="section-title"><div><h2>Usuários</h2><p>Gerencie usuários e acompanhe seus volumes.</p></div></div><div className="table-like">{(adminData.users || []).map((user) => <div key={user.id} className="table-row"><div><strong>{user.name}</strong><span>{user.email} • {user.role} • {user.companyName || 'Sem empresa'}</span></div><span>{user._count?.listings || 0} anúncio(s)</span></div>)}{!(adminData.users || []).length && <p className="empty-inline">Nenhum usuário encontrado.</p>}</div></section>
+      <section className="card"><div className="section-title"><div><h2>Usuários</h2><p>Gerencie usuários e acompanhe seus volumes. Você pode bloquear contas problemáticas a qualquer momento.</p></div></div><div className="table-like">{(adminData.users || []).map((user) => <div key={user.id} className="table-row stacked-row"><div><strong>{user.name}</strong><span>{user.email} • {user.role} • {user.companyName || 'Sem empresa'}</span></div><div className="actions-row wrap"><span>{user._count?.listings || 0} anúncio(s)</span>{user.role !== 'ADMIN' && user.role !== 'BANNED' && <button className="danger" onClick={() => banUser(user.id, true)}>Banir usuário</button>}{user.role === 'BANNED' && <button className="ghost" onClick={() => banUser(user.id, false)}>Desbanir usuário</button>}</div></div>)}{!(adminData.users || []).length && <p className="empty-inline">Nenhum usuário encontrado.</p>}</div></section>
 
       <section className="card">
-        <div className="section-title"><div><h2>Anúncios do sistema</h2><p>O admin agora modera anúncios pendentes e controla destaques quando necessário.</p></div></div>
+        <div className="section-title"><div><h2>Anúncios do sistema</h2><p>Os anúncios entram no ar automaticamente. O admin atua só em exceções, rejeições e destaques.</p></div></div>
         <div className="table-like">
           {adminData.listings.map((listing) => (
             <div key={listing.id} className="table-row stacked-row">
               <div><strong>{listing.title}</strong><span>{listing.user.name} • {listing.status} • {currency(listing.price)} • {listing.city}</span></div>
               <div className="chip-row"><span>{listing._count?.favorites || 0} favorito(s)</span><span>{listing._count?.leads || 0} lead(s)</span></div>
               <div className="actions-row wrap">
-                {listing.status !== 'APPROVED' && <button onClick={() => changeStatus(listing.id, 'APPROVED')}>Aprovar</button>}
-                {listing.status !== 'PENDING' && <button className="ghost" onClick={() => changeStatus(listing.id, 'PENDING')}>Voltar para análise</button>}
+                {listing.status !== 'APPROVED' && <button onClick={() => changeStatus(listing.id, 'APPROVED')}>Publicar</button>}
                 {listing.status !== 'REJECTED' && <button className="danger" onClick={() => changeStatus(listing.id, 'REJECTED')}>Rejeitar</button>}
                 <button className="ghost" onClick={() => toggleFeature(listing.id, !listing.isFeatured)}>{listing.isFeatured ? 'Remover destaque' : 'Dar destaque'}</button>
               </div>
@@ -1279,8 +1277,6 @@ function AdminPanel({ adminData, refreshAdmin, changeStatus, toggleFeature, upda
           {!(adminData.payments || []).length && <p className="empty-inline">Nenhum pagamento registrado ainda.</p>}
         </div>
       </section>
-
-      <section className="card"><h2>Leads do sistema</h2><div className="table-like">{adminData.leads.map((lead) => (<div key={lead.id} className="table-row stacked-row"><div><strong>{lead.name}</strong><span>{lead.phone} • {lead.listing?.title || 'Sem anúncio'}</span></div><p>{lead.message}</p></div>))}{!adminData.leads.length && <p className="empty-inline">Nenhum lead registrado ainda.</p>}</div></section>
     </div>
   );
 }
@@ -1440,7 +1436,7 @@ export default function App() {
   const [selectedStore, setSelectedStore] = useState(null);
   const [editingListing, setEditingListing] = useState(null);
   const [message, setMessage] = useState('');
-  const [adminData, setAdminData] = useState({ dashboard: { users: 0, listings: 0, pending: 0, leads: 0, featured: 0, activeSubscriptions: 0 }, listings: [], leads: [], subscriptions: [], payments: [], plans: [], users: [] });
+  const [adminData, setAdminData] = useState({ dashboard: { users: 0, listings: 0, pending: 0, featured: 0, activeSubscriptions: 0, bannedUsers: 0 }, listings: [], subscriptions: [], payments: [], plans: [], users: [] });
   const [profileForm, setProfileForm] = useState(PROFILE_INITIAL);
   const [savingProfile, setSavingProfile] = useState(false);
 
@@ -1561,16 +1557,26 @@ export default function App() {
   const fetchAdmin = async () => {
     if (auth.user?.role !== 'ADMIN') return;
     try {
-      const [dashboard, adminListings, leads, subscriptions, adminPayments, adminPlans, users] = await Promise.all([
+      const [dashboard, adminListings, subscriptions, adminPayments, adminPlans, users] = await Promise.all([
         api('/admin/dashboard', {}, auth.token),
         api('/admin/listings', {}, auth.token),
-        api('/admin/leads', {}, auth.token),
         api('/plans/admin/subscriptions', {}, auth.token),
         api('/payments/admin/all', {}, auth.token),
         api('/plans/admin/plans', {}, auth.token),
         api('/admin/users', {}, auth.token),
       ]);
-      setAdminData({ dashboard, listings: adminListings, leads, subscriptions, payments: adminPayments, plans: adminPlans, users });
+      setAdminData({ dashboard, listings: adminListings, subscriptions, payments: adminPayments, plans: adminPlans, users });
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+
+  const banUser = async (userId, shouldBan) => {
+    try {
+      await api(`/admin/users/${userId}/${shouldBan ? 'ban' : 'unban'}`, { method: 'PATCH' }, auth.token);
+      setMessage(shouldBan ? 'Usuário banido com sucesso.' : 'Usuário reativado com sucesso.');
+      await fetchAdmin();
     } catch (error) {
       setMessage(error.message);
     }
@@ -1620,7 +1626,7 @@ export default function App() {
       setSubscription(null);
       setPayments([]);
       setMyStore({ canManageStore: false, planSlug: 'particular', planName: 'Particular', profile: storeProfileInitial });
-      setAdminData({ dashboard: { users: 0, listings: 0, pending: 0, leads: 0, featured: 0, activeSubscriptions: 0 }, listings: [], leads: [], subscriptions: [], payments: [], plans: [], users: [] });
+      setAdminData({ dashboard: { users: 0, listings: 0, pending: 0, featured: 0, activeSubscriptions: 0, bannedUsers: 0 }, listings: [], subscriptions: [], payments: [], plans: [], users: [] });
       setProfileForm(PROFILE_INITIAL);
     }
   }, [auth.user, auth.token]);
@@ -1923,7 +1929,7 @@ export default function App() {
         )}
 
         {currentView === 'admin' && auth.user?.role === 'ADMIN' && (
-          <AdminPanel adminData={adminData} refreshAdmin={fetchAdmin} changeStatus={changeStatus} toggleFeature={toggleFeature} updatePaymentStatus={updatePaymentStatus} updatePlan={updatePlan} createPlan={createPlan} deletePlan={deletePlan} />
+          <AdminPanel adminData={adminData} refreshAdmin={fetchAdmin} changeStatus={changeStatus} toggleFeature={toggleFeature} updatePaymentStatus={updatePaymentStatus} updatePlan={updatePlan} createPlan={createPlan} deletePlan={deletePlan} banUser={banUser} />
         )}
 
         {currentView === 'lojas' && <StoresPage stores={stores} onOpenStore={openStore} />}

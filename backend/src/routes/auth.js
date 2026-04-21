@@ -83,6 +83,8 @@ router.post('/login', async (req, res) => {
     const user = await prisma.user.findUnique({ where: { email: normalizedEmail } });
     if (!user) return res.status(401).json({ message: 'Credenciais inválidas.' });
 
+    if (user.role === 'BANNED') return res.status(403).json({ message: 'Sua conta foi bloqueada. Entre em contato com o suporte.' });
+
     const passwordOk = await bcrypt.compare(password, user.passwordHash);
     if (!passwordOk) return res.status(401).json({ message: 'Credenciais inválidas.' });
 

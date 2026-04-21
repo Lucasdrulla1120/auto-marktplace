@@ -8,16 +8,15 @@ router.use(authRequired, adminRequired);
 
 router.get('/dashboard', async (req, res) => {
   await runMarketplaceMaintenance();
-  const [users, listings, pending, favorites, leads, featured, activeSubscriptions] = await Promise.all([
-    prisma.user.count(),
+  const [users, listings, favorites, featured, activeSubscriptions, bannedUsers] = await Promise.all([
+    prisma.user.count({ where: { role: { not: 'BANNED' } } }),
     prisma.listing.count(),
-    prisma.listing.count({ where: { status: 'PENDING' } }),
     prisma.favorite.count(),
-    prisma.lead.count(),
     prisma.listing.count({ where: { isFeatured: true, OR: [{ featuredUntil: null }, { featuredUntil: { gt: new Date() } }] } }),
     prisma.subscription.count({ where: { status: 'ACTIVE', OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] } }),
+    prisma.user.count({ where: { role: 'BANNED' } }),
   ]);
-  res.json({ users, listings, pending, favorites, leads, featured, activeSubscriptions });
+  res.json({ users, listings, pending: 0, favorites, featured, activeSubscriptions, bannedUsers });
 });
 
 router.get('/users', async (req, res) => {
@@ -68,6 +67,26 @@ router.get('/leads', async (req, res) => {
     orderBy: { createdAt: 'desc' }
   });
   res.json(leads);
+});
+
+
+router.patch('/users/:id/ban', async (req, res) => {
+  const userId = Number(req.params.id);
+  if (!Number.isFinite(userId)) return res.status(400).json({ message: 'Usuário inválido.' });
+  const target = await prisma.user.findUnique({ where: { id: userId } });
+  if (!target) return res.status(404).json({ message: 'Usuário não encontrado.' });
+  if (target.role === 'ADMIN') return res.status(400).json({ message: 'Não é possível banir administradores.' });
+  const user = await prisma.user.update({ where: { id: userId }, data: { role: 'BANNED' } });
+  return res.json({ id: user.id, role: user.role });
+});
+
+router.patch('/users/:id/unban', async (req, res) => {
+  const userId = Number(req.params.id);
+  if (!Number.isFinite(userId)) return res.status(400).json({ message: 'Usuário inválido.' });
+  const target = await prisma.user.findUnique({ where: { id: userId } });
+  if (!target) return res.status(404).json({ message: 'Usuário não encontrado.' });
+  const user = await prisma.user.update({ where: { id: userId }, data: { role: 'USER' } });
+  return res.json({ id: user.id, role: user.role });
 });
 
 module.exports = router;
